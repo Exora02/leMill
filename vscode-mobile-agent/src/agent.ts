@@ -4,6 +4,9 @@ import * as path from 'path';
 import * as cp from 'child_process';
 import * as crypto from 'crypto';
 
+let extensionContext: vscode.ExtensionContext | null = null;
+let cachedModels: any[] = [];
+
 // Pending Actions Map
 const pendingActions = new Map<string, (approved: boolean) => void>();
 
@@ -15,7 +18,65 @@ export function handleActionResponse(actionId: string, approved: boolean) {
     }
 }
 
-// System prompt instructing the model how to use tools
+export interface ChatHistoryItem {
+    role: 'user' | 'assistant';
+    text: string;
+}
+
+export let conversationHistory: ChatHistoryItem[] = [];
+
+export async function initializeAgent(context: vscode.ExtensionContext) {
+    extensionContext = context;
+    // Load history
+    const savedHistory = context.workspaceState.get<ChatHistoryItem[]>('agentConversationHistory');
+    if (savedHistory) {
+        conversationHistory = savedHistory;
+    }
+    
+    // Fetch OpenRouter Models
+    try {
+        const config = vscode.workspace.getConfiguration('vscode-mobile-agent');
+        const apiKey = config.get<string>('apiKey');
+        if (apiKey) {
+            const resp = await fetch('https://openrouter.ai/api/v1/models', {
+                headers: { 'Authorization': `Bearer ${apiKey}` }
+            });
+            if (resp.ok) {
+                const data: any = await resp.json();
+                cachedModels = data.data
+                    .filter((m: any) => 
+                        m.id.startsWith('openai/') || 
+                        m.id.startsWith('anthropic/') || 
+                        m.id.startsWith('google/') || 
+                        m.id.startsWith('deepseek/') ||
+                        m.id.startsWith('meta-llama/')
+                    )
+                    .slice(0, 25)
+                    .map((m: any) => ({
+                        id: m.id,
+                        name: m.name.replace(' (beta)', '').substring(0, 30) // shorten long names
+                    }));
+            }
+        }
+    } catch(e) {
+        console.error('Failed to fetch models:', e);
+    }
+}
+
+export function getCachedModels() {
+    return cachedModels;
+}
+
+export function getConversationHistory() {
+    return conversationHistory;
+}
+
+function saveConversationHistory() {
+    if (extensionContext) {
+        extensionContext.workspaceState.update('agentConversationHistory', conversationHistory);
+    }
+}
+
 function getSystemPrompt(): string {
     let workspaceInfo = "No workspace folders opened.";
     if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
@@ -31,11 +92,13 @@ ${workspaceInfo}
 You have access to the following tools:
 1. <call_tool name="readFile">absolute_path_here</call_tool> - Reads a file's content.
 2. <call_tool name="listDirectory">absolute_path_here</call_tool> - Lists contents of a directory.
-3. <call_tool name="findFiles">glob_pattern</call_tool> - Finds files in the workspace (e.g. **/*.ts, src/app.js).
-4. <call_tool name="editFile">absolute_path|exact_text_to_replace|new_text</call_tool> - Edits a file by replacing an exact string with a new string. Use the pipe symbol | as a separator.
-5. <call_tool name="runTerminalCommand">command_here</call_tool> - Runs a shell command. The user will be prompted to approve it on their phone.
-6. <call_tool name="getDiagnostics"></call_tool> - Gets all compiler/linting errors (red squiggly lines) currently in the workspace.
-7. <call_tool name="getCurrentSelection"></call_tool> - Gets the text currently highlighted by the user in their active editor.
+3. <call_tool name="findFiles">glob_pattern</call_tool> - Finds files (e.g. **/*.ts, src/app.js).
+4. <call_tool name="createFile">absolute_path|content</call_tool> - Creates a new file with the given content.
+5. <call_tool name="replaceLines">absolute_path|startLine|endLine|newContent</call_tool> - Replaces specific lines (1-indexed, inclusive) with new content.
+6. <call_tool name="runTerminalCommand">command_here</call_tool> - Runs a shell command. The user will be prompted to approve it on their phone.
+7. <call_tool name="getGitDiff"></call_tool> - Gets git status and uncommitted diffs for the workspace.
+8. <call_tool name="getDiagnostics"></call_tool> - Gets all compiler/linting errors currently in the workspace.
+9. <call_tool name="getCurrentSelection"></call_tool> - Gets the text currently highlighted by the user in their active editor.
 
 To call a tool, output exactly the XML tag above and NOTHING else. Wait for the tool result before continuing.
 Do not hallucinate paths like /workspace. ALWAYS use the absolute paths from the Available workspace folders listed above.
@@ -46,7 +109,7 @@ async function executeTool(name: string, arg: string, onEvent: (evt: any) => voi
     try {
         if (name === 'readFile') {
             const data = await fs.readFile(arg.trim(), 'utf-8');
-            return data.slice(0, 5000); // Limit size
+            return data.slice(0, 8000); // Limit size
         } else if (name === 'listDirectory') {
             const files = await fs.readdir(arg.trim());
             return files.join('\n');
@@ -54,31 +117,51 @@ async function executeTool(name: string, arg: string, onEvent: (evt: any) => voi
             const uris = await vscode.workspace.findFiles(arg.trim(), '**/node_modules/**', 50);
             if (uris.length === 0) return 'No files found matching that pattern.';
             return uris.map(u => u.fsPath).join('\n');
-        } else if (name === 'editFile') {
+        } else if (name === 'createFile') {
             const parts = arg.split('|');
-            if (parts.length !== 3) return 'Error: editFile requires exactly 3 parts separated by | (path|target|replacement)';
-            const [filePath, target, replacement] = parts;
-            const content = await fs.readFile(filePath.trim(), 'utf-8');
-            if (!content.includes(target)) return 'Error: Target string not found in file.';
-            const newContent = content.replace(target, replacement);
-            await fs.writeFile(filePath.trim(), newContent, 'utf-8');
-            return 'File edited successfully.';
+            if (parts.length < 2) return 'Error: createFile requires path|content';
+            const filePath = parts[0].trim();
+            const content = parts.slice(1).join('|'); // Re-join if content had pipes
+            await fs.writeFile(filePath, content, 'utf-8');
+            return 'File created successfully.';
+        } else if (name === 'replaceLines') {
+            const parts = arg.split('|');
+            if (parts.length < 4) return 'Error: replaceLines requires path|startLine|endLine|newContent';
+            const filePath = parts[0].trim();
+            const startLine = parseInt(parts[1].trim(), 10);
+            const endLine = parseInt(parts[2].trim(), 10);
+            const newContent = parts.slice(3).join('|');
+            
+            const content = await fs.readFile(filePath, 'utf-8');
+            const lines = content.split('\n');
+            if (startLine < 1 || endLine > lines.length || startLine > endLine) {
+                return `Error: Invalid line range. File has ${lines.length} lines.`;
+            }
+            
+            lines.splice(startLine - 1, endLine - startLine + 1, newContent);
+            await fs.writeFile(filePath, lines.join('\n'), 'utf-8');
+            return 'Lines replaced successfully.';
+        } else if (name === 'getGitDiff') {
+            return await new Promise<string>((resolve) => {
+                const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+                cp.exec('git status -s && git diff', { cwd }, (error, stdout, stderr) => {
+                    if (error && !stdout) {
+                        resolve(`Git error: ${error.message}\nStderr: ${stderr}`);
+                    } else {
+                        resolve(stdout ? stdout.slice(0, 8000) : 'No uncommitted changes.');
+                    }
+                });
+            });
         } else if (name === 'runTerminalCommand') {
             const actionId = crypto.randomUUID();
-            
-            // Ask for UI confirmation
             onEvent({ type: 'promptAction', actionId, command: arg.trim() });
             
-            // Wait for user to tap Approve or Deny
             const approved = await new Promise<boolean>((resolve) => {
                 pendingActions.set(actionId, resolve);
             });
             
-            if (!approved) {
-                return 'User DENIED the execution of this command.';
-            }
+            if (!approved) return 'User DENIED the execution of this command.';
             
-            // Execute command
             return await new Promise<string>((resolve) => {
                 const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
                 cp.exec(arg.trim(), { cwd }, (error, stdout, stderr) => {
@@ -115,23 +198,14 @@ async function executeTool(name: string, arg: string, onEvent: (evt: any) => voi
     return `Unknown tool: ${name}`;
 }
 
-export interface ChatHistoryItem {
-    role: 'user' | 'assistant';
-    text: string;
-}
-
-export const conversationHistory: ChatHistoryItem[] = [];
-
-export function getConversationHistory() {
-    return conversationHistory;
-}
-
-export async function handleAgentMessage(userText: string, onEvent: (evt: any) => void) {
+export async function handleAgentMessage(userText: string, requestedModel: string, onEvent: (evt: any) => void) {
     try {
         const config = vscode.workspace.getConfiguration('vscode-mobile-agent');
         const apiKey = config.get<string>('apiKey');
         const apiEndpoint = config.get<string>('apiEndpoint') || 'https://openrouter.ai/api/v1/chat/completions';
-        const apiModel = config.get<string>('apiModel') || 'google/gemini-pro';
+        
+        // Use requestedModel from UI if available and valid, otherwise fallback to settings
+        const apiModel = requestedModel || config.get<string>('apiModel') || 'google/gemini-pro';
 
         let chatModel: any = null;
         let useRestApi = false;
@@ -153,19 +227,17 @@ export async function handleAgentMessage(userText: string, onEvent: (evt: any) =
             contextInfo += `Currently active file: ${editor.document.uri.fsPath}\n`;
         }
         
-        // Push user message to history
         conversationHistory.push({ role: 'user', text: userText });
+        saveConversationHistory();
 
         const messages: vscode.LanguageModelChatMessage[] = [
             vscode.LanguageModelChatMessage.User(getSystemPrompt()),
         ];
         
-        // Add history
         for (let i = 0; i < conversationHistory.length; i++) {
             const msg = conversationHistory[i];
             if (msg.role === 'user') {
                 if (i === conversationHistory.length - 1) {
-                    // Inject context into latest user message
                     messages.push(vscode.LanguageModelChatMessage.User(`Workspace Context:\n${contextInfo}\n\nUser: ${msg.text}`));
                 } else {
                     messages.push(vscode.LanguageModelChatMessage.User(msg.text));
@@ -175,7 +247,7 @@ export async function handleAgentMessage(userText: string, onEvent: (evt: any) =
             }
         }
 
-        let maxLoops = 10; // Increased loop limit for complex tool chains
+        let maxLoops = 10;
         let finalAssistantText = '';
         
         while (maxLoops > 0) {
@@ -271,8 +343,8 @@ export async function handleAgentMessage(userText: string, onEvent: (evt: any) =
             break;
         }
 
-        // Save AI response to history
         conversationHistory.push({ role: 'assistant', text: finalAssistantText });
+        saveConversationHistory();
 
     } catch (err: any) {
         onEvent({ type: 'chunk', text: `\nError communicating with LM API: ${err.message}` });

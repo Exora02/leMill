@@ -5,6 +5,8 @@ const statusIndicator = document.getElementById('status-indicator');
 const typingIndicator = document.getElementById('typing-indicator');
 const sessionSelect = document.getElementById('session-select');
 const sessionWrapper = document.getElementById('session-wrapper');
+const modelSelect = document.getElementById('model-select');
+const modelWrapper = document.getElementById('model-wrapper');
 
 // Modal Elements
 const modal = document.getElementById('action-modal');
@@ -57,6 +59,8 @@ function connect() {
             
             if (data.type === 'sessionList') {
                 updateSessionList(data.sessions);
+            } else if (data.type === 'modelList') {
+                updateModelList(data.models);
             } else if (data.type === 'history') {
                 renderHistory(data.history);
             } else if (data.type === 'chunk') {
@@ -118,6 +122,41 @@ sessionSelect.addEventListener('change', () => {
     requestHistory();
 });
 
+function updateModelList(models) {
+    if (!models || models.length === 0) {
+        modelWrapper.style.display = 'none';
+        return;
+    }
+    
+    modelWrapper.style.display = 'inline-block';
+    const oldVal = modelSelect.value || localStorage.getItem('selectedModel');
+    modelSelect.innerHTML = '';
+    
+    let foundOld = false;
+    
+    // Add default blank option
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = 'Default Model';
+    modelSelect.appendChild(defaultOpt);
+    
+    models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.name;
+        modelSelect.appendChild(opt);
+        if (m.id === oldVal) foundOld = true;
+    });
+    
+    if (foundOld) {
+        modelSelect.value = oldVal;
+    }
+}
+
+modelSelect.addEventListener('change', () => {
+    localStorage.setItem('selectedModel', modelSelect.value);
+});
+
 function requestHistory() {
     if (!currentSessionId || !ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: 'getHistory', sessionId: currentSessionId }));
@@ -168,7 +207,12 @@ function sendMessage() {
     appendMessage('user', text);
     msgInput.value = '';
     
-    ws.send(JSON.stringify({ type: 'chat', sessionId: currentSessionId, text: text }));
+    ws.send(JSON.stringify({ 
+        type: 'chat', 
+        sessionId: currentSessionId, 
+        text: text,
+        model: modelSelect.value || undefined
+    }));
     showTyping();
 }
 

@@ -53,7 +53,8 @@ function getWorkspaceName() {
 }
 const activeSessions = new Map();
 const phoneClients = new Set();
-function startServer(context) {
+async function startServer(context) {
+    await (0, agent_1.initializeAgent)(context);
     attemptBecomeHub(context);
 }
 function attemptBecomeHub(context) {
@@ -122,9 +123,10 @@ function handleWorkerConnection(ws) {
 }
 function handlePhoneConnection(ws) {
     phoneClients.add(ws);
-    // Send immediate session list
+    // Send immediate session list and model list
     const list = Array.from(activeSessions.entries()).map(([id, s]) => ({ id, name: s.name }));
     ws.send(JSON.stringify({ type: 'sessionList', sessions: list }));
+    ws.send(JSON.stringify({ type: 'modelList', models: (0, agent_1.getCachedModels)() }));
     ws.on('message', async (msgStr) => {
         try {
             const msg = JSON.parse(msgStr.toString());
@@ -137,7 +139,7 @@ function handlePhoneConnection(ws) {
             if (session.ws === 'local') {
                 // Handle locally in this window (The Hub's own workspace)
                 if (msg.type === 'chat') {
-                    await (0, agent_1.handleAgentMessage)(msg.text, (evt) => {
+                    await (0, agent_1.handleAgentMessage)(msg.text, msg.model, (evt) => {
                         ws.send(JSON.stringify(evt));
                     });
                     ws.send(JSON.stringify({ type: 'done' }));
@@ -171,7 +173,7 @@ function becomeWorker(context) {
             if (msg.type === 'forwardToWorker') {
                 const payload = msg.payload;
                 if (payload.type === 'chat') {
-                    await (0, agent_1.handleAgentMessage)(payload.text, (evt) => {
+                    await (0, agent_1.handleAgentMessage)(payload.text, payload.model, (evt) => {
                         workerWs.send(JSON.stringify({ type: 'forwardToPhone', payload: evt }));
                     });
                     workerWs.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'done' } }));

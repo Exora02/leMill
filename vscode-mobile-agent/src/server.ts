@@ -4,7 +4,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
-import { handleAgentMessage, getConversationHistory, handleActionResponse } from './agent';
+import { handleAgentMessage, getConversationHistory, handleActionResponse, initializeAgent, getCachedModels } from './agent';
 
 let isHub = false;
 let hubServer: http.Server | null = null;
@@ -21,7 +21,8 @@ function getWorkspaceName() {
 const activeSessions = new Map<string, { ws: WebSocket | 'local', name: string }>();
 const phoneClients = new Set<WebSocket>();
 
-export function startServer(context: vscode.ExtensionContext) {
+export async function startServer(context: vscode.ExtensionContext) {
+    await initializeAgent(context);
     attemptBecomeHub(context);
 }
 
@@ -96,9 +97,10 @@ function handleWorkerConnection(ws: WebSocket) {
 function handlePhoneConnection(ws: WebSocket) {
     phoneClients.add(ws);
     
-    // Send immediate session list
+    // Send immediate session list and model list
     const list = Array.from(activeSessions.entries()).map(([id, s]) => ({ id, name: s.name }));
     ws.send(JSON.stringify({ type: 'sessionList', sessions: list }));
+    ws.send(JSON.stringify({ type: 'modelList', models: getCachedModels() }));
 
     ws.on('message', async (msgStr: string) => {
         try {
@@ -115,7 +117,7 @@ function handlePhoneConnection(ws: WebSocket) {
             if (session.ws === 'local') {
                 // Handle locally in this window (The Hub's own workspace)
                 if (msg.type === 'chat') {
-                    await handleAgentMessage(msg.text, (evt: any) => {
+                    await handleAgentMessage(msg.text, msg.model, (evt: any) => {
                         ws.send(JSON.stringify(evt));
                     });
                     ws.send(JSON.stringify({ type: 'done' }));
@@ -149,7 +151,7 @@ function becomeWorker(context: vscode.ExtensionContext) {
             if (msg.type === 'forwardToWorker') {
                 const payload = msg.payload;
                 if (payload.type === 'chat') {
-                    await handleAgentMessage(payload.text, (evt: any) => {
+                    await handleAgentMessage(payload.text, payload.model, (evt: any) => {
                         workerWs!.send(JSON.stringify({ type: 'forwardToPhone', payload: evt }));
                     });
                     workerWs!.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'done' } }));

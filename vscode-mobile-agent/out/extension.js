@@ -40,11 +40,11 @@ const server_1 = require("./server");
 function activate(context) {
     console.log('Mobile Agent Extension is now active!');
     let startCmd = vscode.commands.registerCommand('vscode-mobile-agent.startServer', () => {
-        (0, server_1.startServer)(context);
+        (0, server_1.startServer)(context).catch(console.error);
     });
     context.subscriptions.push(startCmd);
     // Auto-start server for convenience
-    (0, server_1.startServer)(context);
+    (0, server_1.startServer)(context).catch(console.error);
 }
 function deactivate() {
     (0, server_1.stopServer)();
