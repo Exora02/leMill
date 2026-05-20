@@ -3,14 +3,27 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 
 // System prompt instructing the model how to use tools
-const SYSTEM_PROMPT = `You are a powerful AI agent running inside the user's VS Code editor. 
+function getSystemPrompt(): string {
+    let workspaceInfo = "No workspace folders opened.";
+    if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+        workspaceInfo = "Available workspace folders (use these absolute paths!):\n" + 
+            vscode.workspace.workspaceFolders.map(f => `- ${f.uri.fsPath}`).join('\n');
+    }
+
+    return `You are a powerful AI agent running inside the user's VS Code editor. 
 The user is talking to you from their phone.
+
+${workspaceInfo}
+
 You have access to the following tools:
 1. <call_tool name="readFile">absolute_path_here</call_tool> - Reads a file's content.
 2. <call_tool name="listDirectory">absolute_path_here</call_tool> - Lists contents of a directory.
+3. <call_tool name="findFiles">glob_pattern</call_tool> - Finds files in the workspace (e.g. **/*.ts, src/app.js).
 
 To call a tool, output exactly the XML tag above and NOTHING else. Wait for the tool result before continuing.
+Do not hallucinate paths like /workspace. ALWAYS use the absolute paths from the Available workspace folders listed above.
 If you have the answer, just respond normally.`;
+}
 
 async function executeTool(name: string, arg: string): Promise<string> {
     try {
@@ -20,6 +33,10 @@ async function executeTool(name: string, arg: string): Promise<string> {
         } else if (name === 'listDirectory') {
             const files = await fs.readdir(arg.trim());
             return files.join('\n');
+        } else if (name === 'findFiles') {
+            const uris = await vscode.workspace.findFiles(arg.trim(), '**/node_modules/**', 50);
+            if (uris.length === 0) return 'No files found matching that pattern.';
+            return uris.map(u => u.fsPath).join('\n');
         }
     } catch (e: any) {
         return `Error executing ${name}: ${e.message}`;
@@ -59,7 +76,7 @@ export async function handleAgentMessage(userText: string, onChunk: (chunk: stri
         }
 
         const messages: vscode.LanguageModelChatMessage[] = [
-            vscode.LanguageModelChatMessage.User(SYSTEM_PROMPT),
+            vscode.LanguageModelChatMessage.User(getSystemPrompt()),
             vscode.LanguageModelChatMessage.User(`Workspace Context:\n${context}\n\nUser: ${userText}`)
         ];
 

@@ -2,7 +2,7 @@
   "name": "vscode-mobile-agent",
   "displayName": "Mobile Agent",
   "description": "Control an AI Agent in your workspace directly from your phone",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "engines": {
     "vscode": "^1.90.0"
   },
