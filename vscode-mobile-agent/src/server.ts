@@ -1,68 +1,188 @@
 import express = require('express');
 import * as http from 'http';
-import * as WebSocket from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { handleAgentMessage } from './agent';
+import * as crypto from 'crypto';
+import { handleAgentMessage, getConversationHistory } from './agent';
 
-let server: http.Server | null = null;
-let wss: WebSocket.Server | null = null;
+let isHub = false;
+let hubServer: http.Server | null = null;
+let wss: WebSocketServer | null = null;
+let workerWs: WebSocket | null = null;
 
-export function startServer(context: vscode.ExtensionContext): number {
-    if (server) {
-        vscode.window.showInformationMessage('Mobile Agent Server is already running.');
-        return (server.address() as any).port;
-    }
+// Unique ID for this specific VS Code window session
+const sessionId = crypto.randomUUID();
 
+function getWorkspaceName() {
+    return vscode.workspace.name || 'Untitled Workspace';
+}
+
+const activeSessions = new Map<string, { ws: WebSocket | 'local', name: string }>();
+const phoneClients = new Set<WebSocket>();
+
+export function startServer(context: vscode.ExtensionContext) {
+    attemptBecomeHub(context);
+}
+
+function attemptBecomeHub(context: vscode.ExtensionContext) {
     const app = express();
     app.use(express.static(path.join(context.extensionPath, 'public')));
     app.use(express.json());
 
-    server = http.createServer(app);
-    wss = new WebSocket.Server({ server });
+    const port = 8333;
+    const server = http.createServer(app);
+    
+    server.on('error', (err: any) => {
+        if (err.code === 'EADDRINUSE') {
+            console.log('Port 8333 in use. Becoming a Worker.');
+            becomeWorker(context);
+        }
+    });
 
-    wss.on('connection', (ws) => {
-        console.log('Mobile Agent connected.');
+    server.listen(port, '0.0.0.0', () => {
+        console.log(`Became Hub on port ${port}.`);
+        isHub = true;
+        hubServer = server;
+        wss = new WebSocketServer({ server });
         
-        ws.on('message', async (message: string) => {
-            try {
-                const data = JSON.parse(message.toString());
-                if (data.type === 'chat') {
-                    // Send message to the agent, providing a callback to stream chunks back to the client
-                    await handleAgentMessage(data.text, (chunk: string) => {
-                        ws.send(JSON.stringify({ type: 'chunk', text: chunk }));
-                    });
-                    
-                    // Signal the end of the stream
-                    ws.send(JSON.stringify({ type: 'done' }));
-                }
-            } catch (err: any) {
-                console.error('Error handling message:', err);
-                ws.send(JSON.stringify({ type: 'error', text: err.message }));
+        // Register self as local session
+        activeSessions.set(sessionId, { ws: 'local', name: getWorkspaceName() });
+
+        wss.on('connection', (ws, req) => {
+            if (req.url === '/worker') {
+                handleWorkerConnection(ws);
+            } else {
+                handlePhoneConnection(ws);
             }
         });
-
-        ws.on('close', () => {
-            console.log('Mobile Agent disconnected.');
-        });
+        
+        vscode.window.showInformationMessage(`Mobile Agent Hub started on port ${port}.`);
     });
+}
 
-    const port = 8333; // Fixed port for ease of use, or we can use 0 for random
-    server.listen(port, '0.0.0.0', () => {
-        vscode.window.showInformationMessage(`Mobile Agent Server started on port ${port}. Connect via http://<YOUR_IP>:${port}`);
+function broadcastSessionList() {
+    const list = Array.from(activeSessions.entries()).map(([id, s]) => ({ id, name: s.name }));
+    const msg = JSON.stringify({ type: 'sessionList', sessions: list });
+    phoneClients.forEach(c => {
+        if (c.readyState === WebSocket.OPEN) c.send(msg);
+    });
+}
+
+function handleWorkerConnection(ws: WebSocket) {
+    let workerId = '';
+    ws.on('message', (msgStr: string) => {
+        try {
+            const msg = JSON.parse(msgStr.toString());
+            if (msg.type === 'register') {
+                workerId = msg.sessionId;
+                activeSessions.set(workerId, { ws, name: msg.name });
+                broadcastSessionList();
+            } else if (msg.type === 'forwardToPhone') {
+                // Forward directly to all phone clients
+                phoneClients.forEach(c => {
+                    if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify(msg.payload));
+                });
+            }
+        } catch(e) {}
     });
     
-    return port;
+    ws.on('close', () => {
+        if (workerId) activeSessions.delete(workerId);
+        broadcastSessionList();
+    });
+}
+
+function handlePhoneConnection(ws: WebSocket) {
+    phoneClients.add(ws);
+    
+    // Send immediate session list
+    const list = Array.from(activeSessions.entries()).map(([id, s]) => ({ id, name: s.name }));
+    ws.send(JSON.stringify({ type: 'sessionList', sessions: list }));
+
+    ws.on('message', async (msgStr: string) => {
+        try {
+            const msg = JSON.parse(msgStr.toString());
+            const targetSessionId = msg.sessionId;
+            
+            if (!targetSessionId || !activeSessions.has(targetSessionId)) {
+                ws.send(JSON.stringify({ type: 'error', text: 'Invalid or disconnected session selected.' }));
+                return;
+            }
+            
+            const session = activeSessions.get(targetSessionId)!;
+            
+            if (session.ws === 'local') {
+                // Handle locally in this window (The Hub's own workspace)
+                if (msg.type === 'chat') {
+                    await handleAgentMessage(msg.text, (chunk: string) => {
+                        ws.send(JSON.stringify({ type: 'chunk', text: chunk }));
+                    });
+                    ws.send(JSON.stringify({ type: 'done' }));
+                } else if (msg.type === 'getHistory') {
+                    ws.send(JSON.stringify({ type: 'history', history: getConversationHistory() }));
+                }
+            } else {
+                // Forward to the specific worker
+                session.ws.send(JSON.stringify({ type: 'forwardToWorker', payload: msg }));
+            }
+        } catch(e) {}
+    });
+
+    ws.on('close', () => phoneClients.delete(ws));
+}
+
+function becomeWorker(context: vscode.ExtensionContext) {
+    isHub = false;
+    workerWs = new WebSocket('ws://localhost:8333/worker');
+    
+    workerWs!.on('open', () => {
+        console.log('Connected to Hub as Worker.');
+        workerWs!.send(JSON.stringify({ type: 'register', sessionId, name: getWorkspaceName() }));
+    });
+    
+    workerWs!.on('message', async (msgStr: string) => {
+        try {
+            const msg = JSON.parse(msgStr.toString());
+            if (msg.type === 'forwardToWorker') {
+                const payload = msg.payload;
+                if (payload.type === 'chat') {
+                    await handleAgentMessage(payload.text, (chunk: string) => {
+                        workerWs!.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'chunk', text: chunk } }));
+                    });
+                    workerWs!.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'done' } }));
+                } else if (payload.type === 'getHistory') {
+                    workerWs!.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'history', history: getConversationHistory() } }));
+                }
+            }
+        } catch(e) {}
+    });
+    
+    workerWs!.on('close', () => {
+        console.log('Lost connection to Hub. Attempting to become Hub...');
+        workerWs = null;
+        // Wait a random short delay to prevent collisions if multiple workers try to become Hub at once
+        setTimeout(() => {
+            attemptBecomeHub(context);
+        }, 1000 + Math.random() * 2000);
+    });
+    
+    workerWs!.on('error', () => {
+        // Error will trigger close anyway
+    });
 }
 
 export function stopServer() {
+    if (workerWs) {
+        workerWs.close();
+        workerWs = null;
+    }
     if (wss) {
         wss.close();
         wss = null;
     }
-    if (server) {
-        server.close();
-        server = null;
-        vscode.window.showInformationMessage('Mobile Agent Server stopped.');
+    if (hubServer) {
+        hubServer.close();
+        hubServer = null;
     }
 }

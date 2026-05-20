@@ -44,6 +44,17 @@ async function executeTool(name: string, arg: string): Promise<string> {
     return `Unknown tool: ${name}`;
 }
 
+export interface ChatHistoryItem {
+    role: 'user' | 'assistant';
+    text: string;
+}
+
+export const conversationHistory: ChatHistoryItem[] = [];
+
+export function getConversationHistory() {
+    return conversationHistory;
+}
+
 export async function handleAgentMessage(userText: string, onChunk: (chunk: string) => void) {
     try {
         const config = vscode.workspace.getConfiguration('vscode-mobile-agent');
@@ -57,37 +68,51 @@ export async function handleAgentMessage(userText: string, onChunk: (chunk: stri
         if (apiKey) {
             useRestApi = true;
         } else {
-            // Find any available chat model
             const allModels = await vscode.lm.selectChatModels({});
             if (allModels.length === 0) {
                 onChunk('No AI models found in your VS Code, and no API Key is configured.\n\nPlease open VS Code Settings, search for "Mobile Agent", and add an API Key (e.g., OpenRouter) to use Bring-Your-Own-Key (BYOK).');
                 return;
             }
-            chatModel = allModels.find(m => m.name.includes('gpt-4') || m.family.includes('gpt-4')) 
-                        || allModels[0];
+            chatModel = allModels.find(m => m.name.includes('gpt-4') || m.family.includes('gpt-4')) || allModels[0];
         }
 
-        // Gather initial context
-        let context = '';
+        let contextInfo = '';
         const editor = vscode.window.activeTextEditor;
         if (editor) {
-            const doc = editor.document;
-            context += `Currently active file: ${doc.uri.fsPath}\n`;
+            contextInfo += `Currently active file: ${editor.document.uri.fsPath}\n`;
         }
+        
+        // Push user message to history
+        conversationHistory.push({ role: 'user', text: userText });
 
         const messages: vscode.LanguageModelChatMessage[] = [
             vscode.LanguageModelChatMessage.User(getSystemPrompt()),
-            vscode.LanguageModelChatMessage.User(`Workspace Context:\n${context}\n\nUser: ${userText}`)
         ];
+        
+        // Add history
+        for (let i = 0; i < conversationHistory.length; i++) {
+            const msg = conversationHistory[i];
+            if (msg.role === 'user') {
+                if (i === conversationHistory.length - 1) {
+                    // Inject context into latest user message
+                    messages.push(vscode.LanguageModelChatMessage.User(`Workspace Context:\n${contextInfo}\n\nUser: ${msg.text}`));
+                } else {
+                    messages.push(vscode.LanguageModelChatMessage.User(msg.text));
+                }
+            } else {
+                messages.push(vscode.LanguageModelChatMessage.Assistant(msg.text));
+            }
+        }
 
         let maxLoops = 5;
+        let finalAssistantText = '';
+        
         while (maxLoops > 0) {
             maxLoops--;
             
             let fullResponseText = '';
 
             if (useRestApi) {
-                // REST API Call (BYOK)
                 const apiMessages = messages.map((m, i) => ({
                     role: i === 0 ? 'system' : 
                           (m instanceof vscode.LanguageModelChatMessage && m.role ? 
@@ -117,7 +142,6 @@ export async function handleAgentMessage(userText: string, onChunk: (chunk: stri
                     break;
                 }
 
-                // Super basic streaming reader (assumes OpenAI SSE format)
                 const reader = response.body?.getReader();
                 const decoder = new TextDecoder("utf-8");
                 if (reader) {
@@ -133,7 +157,10 @@ export async function handleAgentMessage(userText: string, onChunk: (chunk: stri
                                     const content = data.choices[0]?.delta?.content || '';
                                     if (content) {
                                         fullResponseText += content;
-                                        if (!fullResponseText.includes('<call_tool')) onChunk(content);
+                                        if (!fullResponseText.includes('<call_tool')) {
+                                            onChunk(content);
+                                            finalAssistantText += content;
+                                        }
                                     }
                                 } catch(e){}
                             }
@@ -141,37 +168,40 @@ export async function handleAgentMessage(userText: string, onChunk: (chunk: stri
                     }
                 }
             } else {
-                // vscode.lm API
                 const response = await chatModel.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
                 for await (const chunk of response.text) {
                     fullResponseText += chunk;
                     if (!fullResponseText.includes('<call_tool')) {
                         onChunk(chunk);
+                        finalAssistantText += chunk;
                     }
                 }
             }
             
-            // Check if there was a tool call
             const toolMatch = fullResponseText.match(/<call_tool name="([^"]+)">([^<]+)<\/call_tool>/);
             if (toolMatch) {
                 const toolName = toolMatch[1];
                 const toolArg = toolMatch[2];
-                onChunk(`\n[Agent is running tool: ${toolName}(${toolArg})]\n`);
+                const toolLog = `\n[Agent is running tool: ${toolName}(${toolArg})]\n`;
+                onChunk(toolLog);
+                finalAssistantText += toolLog;
                 
                 const toolResult = await executeTool(toolName, toolArg);
                 
                 messages.push(vscode.LanguageModelChatMessage.Assistant(fullResponseText));
                 messages.push(vscode.LanguageModelChatMessage.User(`Tool Result:\n${toolResult}\nContinue your response.`));
-                continue; // Loop back and query model again
+                continue; 
             }
             
-            // If no tool call, we are done
             if (fullResponseText.includes('<call_tool')) {
-                // In case it was partially streamed and we suppressed it, send the rest
                 onChunk(fullResponseText);
+                finalAssistantText += fullResponseText;
             }
             break;
         }
+
+        // Save AI response to history
+        conversationHistory.push({ role: 'assistant', text: finalAssistantText });
 
     } catch (err: any) {
         onChunk(`\nError communicating with LM API: ${err.message}`);
