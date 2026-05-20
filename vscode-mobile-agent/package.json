@@ -1,0 +1,61 @@
+{
+  "name": "vscode-mobile-agent",
+  "displayName": "Mobile Agent",
+  "description": "Control an AI Agent in your workspace directly from your phone",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "*"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscode-mobile-agent.startServer",
+        "title": "Mobile Agent: Start Remote Server"
+      }
+    ],
+    "configuration": {
+      "title": "Mobile Agent",
+      "properties": {
+        "vscode-mobile-agent.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API Key for Bring-Your-Own-Key (e.g., OpenRouter, OpenAI)"
+        },
+        "vscode-mobile-agent.apiEndpoint": {
+          "type": "string",
+          "default": "https://openrouter.ai/api/v1/chat/completions",
+          "description": "API Endpoint (must be OpenAI compatible)"
+        },
+        "vscode-mobile-agent.apiModel": {
+          "type": "string",
+          "default": "google/gemini-pro",
+          "description": "Model ID to use (e.g., google/gemini-pro for OpenRouter)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.17.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.90.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.4.5"
+  }
+}
