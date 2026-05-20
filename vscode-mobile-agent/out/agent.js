@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.conversationHistory = void 0;
 exports.handleActionResponse = handleActionResponse;
+exports.handleSettings = handleSettings;
 exports.initializeAgent = initializeAgent;
 exports.getCachedModels = getCachedModels;
 exports.getConversationHistory = getConversationHistory;
@@ -45,6 +46,7 @@ const cp = __importStar(require("child_process"));
 const crypto = __importStar(require("crypto"));
 let extensionContext = null;
 let cachedModels = [];
+let activeProvider = 'openrouter';
 // Pending Actions Map
 const pendingActions = new Map();
 function handleActionResponse(actionId, approved) {
@@ -54,40 +56,65 @@ function handleActionResponse(actionId, approved) {
         pendingActions.delete(actionId);
     }
 }
+async function handleSettings(provider, apiKey) {
+    if (!extensionContext)
+        return;
+    activeProvider = provider;
+    await extensionContext.globalState.update('agentProvider', provider);
+    if (apiKey) {
+        await extensionContext.secrets.store(`agentApiKey_${provider}`, apiKey);
+    }
+    // Refresh models if provider changed
+    if (provider === 'openrouter') {
+        fetchOpenRouterModels(apiKey);
+    }
+    else if (provider === 'openai') {
+        cachedModels = [{ id: 'gpt-4o', name: 'GPT-4o' }, { id: 'gpt-4-turbo', name: 'GPT-4 Turbo' }];
+    }
+    else if (provider === 'anthropic') {
+        cachedModels = [{ id: 'claude-3-5-sonnet-20240620', name: 'Claude 3.5 Sonnet' }];
+    }
+    else if (provider === 'gemini') {
+        cachedModels = [{ id: 'gemini-1.5-pro-latest', name: 'Gemini 1.5 Pro' }];
+    }
+}
 exports.conversationHistory = [];
+async function fetchOpenRouterModels(key) {
+    try {
+        const resp = await fetch('https://openrouter.ai/api/v1/models', {
+            headers: { 'Authorization': `Bearer ${key}` }
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            cachedModels = data.data
+                .filter((m) => m.id.startsWith('openai/') ||
+                m.id.startsWith('anthropic/') ||
+                m.id.startsWith('google/') ||
+                m.id.startsWith('deepseek/') ||
+                m.id.startsWith('meta-llama/'))
+                .slice(0, 25)
+                .map((m) => ({
+                id: m.id,
+                name: m.name.replace(' (beta)', '').substring(0, 30)
+            }));
+        }
+    }
+    catch (e) { }
+}
 async function initializeAgent(context) {
     extensionContext = context;
-    // Load history
     const savedHistory = context.workspaceState.get('agentConversationHistory');
     if (savedHistory) {
         exports.conversationHistory = savedHistory;
     }
-    // Fetch OpenRouter Models
-    try {
-        const config = vscode.workspace.getConfiguration('vscode-mobile-agent');
-        const apiKey = config.get('apiKey');
-        if (apiKey) {
-            const resp = await fetch('https://openrouter.ai/api/v1/models', {
-                headers: { 'Authorization': `Bearer ${apiKey}` }
-            });
-            if (resp.ok) {
-                const data = await resp.json();
-                cachedModels = data.data
-                    .filter((m) => m.id.startsWith('openai/') ||
-                    m.id.startsWith('anthropic/') ||
-                    m.id.startsWith('google/') ||
-                    m.id.startsWith('deepseek/') ||
-                    m.id.startsWith('meta-llama/'))
-                    .slice(0, 25)
-                    .map((m) => ({
-                    id: m.id,
-                    name: m.name.replace(' (beta)', '').substring(0, 30) // shorten long names
-                }));
-            }
-        }
+    activeProvider = context.globalState.get('agentProvider') || 'openrouter';
+    const apiKey = await context.secrets.get(`agentApiKey_${activeProvider}`) || '';
+    if (activeProvider === 'openrouter' && apiKey) {
+        fetchOpenRouterModels(apiKey);
     }
-    catch (e) {
-        console.error('Failed to fetch models:', e);
+    else {
+        // Just initialize fallback lists
+        handleSettings(activeProvider, '');
     }
 }
 function getCachedModels() {
@@ -113,25 +140,24 @@ The user is talking to you from their phone.
 ${workspaceInfo}
 
 You have access to the following tools:
-1. <call_tool name="readFile">absolute_path_here</call_tool> - Reads a file's content.
-2. <call_tool name="listDirectory">absolute_path_here</call_tool> - Lists contents of a directory.
-3. <call_tool name="findFiles">glob_pattern</call_tool> - Finds files (e.g. **/*.ts, src/app.js).
-4. <call_tool name="createFile">absolute_path|content</call_tool> - Creates a new file with the given content.
-5. <call_tool name="replaceLines">absolute_path|startLine|endLine|newContent</call_tool> - Replaces specific lines (1-indexed, inclusive) with new content.
-6. <call_tool name="runTerminalCommand">command_here</call_tool> - Runs a shell command. The user will be prompted to approve it on their phone.
-7. <call_tool name="getGitDiff"></call_tool> - Gets git status and uncommitted diffs for the workspace.
-8. <call_tool name="getDiagnostics"></call_tool> - Gets all compiler/linting errors currently in the workspace.
-9. <call_tool name="getCurrentSelection"></call_tool> - Gets the text currently highlighted by the user in their active editor.
+1. <call_tool name="readFile">absolute_path_here</call_tool>
+2. <call_tool name="listDirectory">absolute_path_here</call_tool>
+3. <call_tool name="findFiles">glob_pattern</call_tool>
+4. <call_tool name="createFile">absolute_path|content</call_tool>
+5. <call_tool name="replaceLines">absolute_path|startLine|endLine|newContent</call_tool>
+6. <call_tool name="runTerminalCommand">command_here</call_tool>
+7. <call_tool name="getGitDiff"></call_tool>
+8. <call_tool name="getDiagnostics"></call_tool>
+9. <call_tool name="getCurrentSelection"></call_tool>
 
 To call a tool, output exactly the XML tag above and NOTHING else. Wait for the tool result before continuing.
-Do not hallucinate paths like /workspace. ALWAYS use the absolute paths from the Available workspace folders listed above.
-If you have the answer, just respond normally.`;
+Do not hallucinate paths like /workspace. ALWAYS use the absolute paths from the Available workspace folders listed above.`;
 }
 async function executeTool(name, arg, onEvent) {
     try {
         if (name === 'readFile') {
             const data = await fs.readFile(arg.trim(), 'utf-8');
-            return data.slice(0, 8000); // Limit size
+            return data.slice(0, 8000);
         }
         else if (name === 'listDirectory') {
             const files = await fs.readdir(arg.trim());
@@ -148,7 +174,7 @@ async function executeTool(name, arg, onEvent) {
             if (parts.length < 2)
                 return 'Error: createFile requires path|content';
             const filePath = parts[0].trim();
-            const content = parts.slice(1).join('|'); // Re-join if content had pipes
+            const content = parts.slice(1).join('|');
             await fs.writeFile(filePath, content, 'utf-8');
             return 'File created successfully.';
         }
@@ -233,23 +259,24 @@ async function executeTool(name, arg, onEvent) {
 }
 async function handleAgentMessage(userText, requestedModel, onEvent) {
     try {
-        const config = vscode.workspace.getConfiguration('vscode-mobile-agent');
-        const apiKey = config.get('apiKey');
-        const apiEndpoint = config.get('apiEndpoint') || 'https://openrouter.ai/api/v1/chat/completions';
-        // Use requestedModel from UI if available and valid, otherwise fallback to settings
-        const apiModel = requestedModel || config.get('apiModel') || 'google/gemini-pro';
+        const apiKey = await extensionContext?.secrets.get(`agentApiKey_${activeProvider}`) || '';
         let chatModel = null;
-        let useRestApi = false;
-        if (apiKey) {
-            useRestApi = true;
-        }
-        else {
+        // Native VS Code models (Copilot & Antigravity)
+        if (requestedModel === 'copilot' || requestedModel === 'antigravity' || !apiKey) {
             const allModels = await vscode.lm.selectChatModels({});
             if (allModels.length === 0) {
-                onEvent({ type: 'chunk', text: 'No AI models found in your VS Code, and no API Key is configured.\n\nPlease open VS Code Settings, search for "Mobile Agent", and add an API Key (e.g., OpenRouter) to use Bring-Your-Own-Key (BYOK).' });
+                onEvent({ type: 'chunk', text: 'No AI models found in VS Code, and no API Key is configured in the mobile app settings.' });
                 return;
             }
-            chatModel = allModels.find(m => m.name.includes('gpt-4') || m.family.includes('gpt-4')) || allModels[0];
+            if (requestedModel === 'copilot') {
+                chatModel = allModels.find(m => m.name.toLowerCase().includes('copilot') || m.id.toLowerCase().includes('copilot')) || allModels[0];
+            }
+            else if (requestedModel === 'antigravity') {
+                chatModel = allModels.find(m => m.name.toLowerCase().includes('antigravity') || m.id.toLowerCase().includes('gemini')) || allModels[0];
+            }
+            else {
+                chatModel = allModels[0];
+            }
         }
         let contextInfo = '';
         const editor = vscode.window.activeTextEditor;
@@ -275,12 +302,26 @@ async function handleAgentMessage(userText, requestedModel, onEvent) {
                 messages.push(vscode.LanguageModelChatMessage.Assistant(msg.text));
             }
         }
-        let maxLoops = 10;
+        let maxLoops = 20; // Increased for background tasks
         let finalAssistantText = '';
         while (maxLoops > 0) {
             maxLoops--;
             let fullResponseText = '';
-            if (useRestApi) {
+            if (chatModel) {
+                const response = await chatModel.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
+                for await (const chunk of response.text) {
+                    fullResponseText += chunk;
+                    if (!fullResponseText.includes('<call_tool')) {
+                        onEvent({ type: 'chunk', text: chunk });
+                        finalAssistantText += chunk;
+                    }
+                }
+            }
+            else {
+                // REST API handling for OpenRouter, OpenAI, Anthropic, Gemini
+                let endpoint = '';
+                let headers = { 'Content-Type': 'application/json' };
+                let body = {};
                 const apiMessages = messages.map((m, i) => ({
                     role: i === 0 ? 'system' :
                         (m instanceof vscode.LanguageModelChatMessage && m.role ?
@@ -288,23 +329,20 @@ async function handleAgentMessage(userText, requestedModel, onEvent) {
                             (m.role === vscode.LanguageModelChatMessageRole.User ? 'user' : 'assistant')),
                     content: m.content instanceof Array ? m.content.map((c) => c.value).join('') : typeof m.content === 'string' ? m.content : ''
                 }));
-                const response = await fetch(apiEndpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${apiKey}`,
-                        'Content-Type': 'application/json',
-                        'HTTP-Referer': 'http://localhost:8333',
-                        'X-Title': 'VSCode Mobile Agent'
-                    },
-                    body: JSON.stringify({
-                        model: apiModel,
-                        messages: apiMessages,
-                        stream: true
-                    })
-                });
+                if (activeProvider === 'openrouter' || activeProvider === 'openai') {
+                    endpoint = activeProvider === 'openrouter' ? 'https://openrouter.ai/api/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
+                    headers['Authorization'] = `Bearer ${apiKey}`;
+                    if (activeProvider === 'openrouter')
+                        headers['HTTP-Referer'] = 'http://localhost:8333';
+                    body = { model: requestedModel || 'gpt-4o', messages: apiMessages, stream: true };
+                }
+                else {
+                    onEvent({ type: 'chunk', text: `Provider ${activeProvider} REST integration is not fully implemented yet.` });
+                    break;
+                }
+                const response = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) });
                 if (!response.ok) {
-                    const errText = await response.text();
-                    onEvent({ type: 'chunk', text: `API Error: ${response.status} ${response.statusText}\nDetails: ${errText}` });
+                    onEvent({ type: 'chunk', text: `API Error: ${response.status} ${await response.text()}` });
                     break;
                 }
                 const reader = response.body?.getReader();
@@ -335,16 +373,6 @@ async function handleAgentMessage(userText, requestedModel, onEvent) {
                     }
                 }
             }
-            else {
-                const response = await chatModel.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
-                for await (const chunk of response.text) {
-                    fullResponseText += chunk;
-                    if (!fullResponseText.includes('<call_tool')) {
-                        onEvent({ type: 'chunk', text: chunk });
-                        finalAssistantText += chunk;
-                    }
-                }
-            }
             const toolMatch = fullResponseText.match(/<call_tool name="([^"]+)">([^<]*)<\/call_tool>/);
             if (toolMatch) {
                 const toolName = toolMatch[1];
@@ -367,7 +395,7 @@ async function handleAgentMessage(userText, requestedModel, onEvent) {
         saveConversationHistory();
     }
     catch (err) {
-        onEvent({ type: 'chunk', text: `\nError communicating with LM API: ${err.message}` });
+        onEvent({ type: 'chunk', text: `\nError communicating with API: ${err.message}` });
     }
 }
 //# sourceMappingURL=agent.js.map

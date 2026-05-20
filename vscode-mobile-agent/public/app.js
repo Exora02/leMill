@@ -14,11 +14,40 @@ const modalCmdText = document.getElementById('modal-command-text');
 const btnApprove = document.getElementById('btn-approve');
 const btnDeny = document.getElementById('btn-deny');
 
+// Settings Elements
+const btnSettings = document.getElementById('btn-settings');
+const settingsModal = document.getElementById('settings-modal');
+const btnSaveSettings = document.getElementById('btn-save-settings');
+const btnCancelSettings = document.getElementById('btn-cancel-settings');
+const providerSelect = document.getElementById('provider-select');
+const apikeyInput = document.getElementById('apikey-input');
+
+// PWA Install
+const btnInstall = document.getElementById('btn-install');
+
 let ws;
 let currentAgentMessageDiv = null;
 let currentMessageRaw = '';
 let currentSessionId = null;
 let pendingActionId = null;
+let authToken = localStorage.getItem('agentAuthToken') || '';
+
+// Check URL for new token
+const urlParams = new URLSearchParams(window.location.search);
+const urlToken = urlParams.get('token');
+if (urlToken) {
+    authToken = urlToken;
+    localStorage.setItem('agentAuthToken', authToken);
+    window.history.replaceState({}, document.title, window.location.pathname);
+}
+
+// Dynamically inject token into manifest URL so iOS PWA saves the token in start_url
+if (authToken) {
+    const manifestLink = document.getElementById('manifest-link');
+    if (manifestLink) {
+        manifestLink.setAttribute('href', `manifest.json?token=${authToken}`);
+    }
+}
 
 function escapeHtml(unsafe) {
     return unsafe
@@ -36,8 +65,15 @@ function formatAgentMessage(rawText) {
 }
 
 function connect() {
+    if (!authToken) {
+        statusIndicator.textContent = 'Missing Token';
+        statusIndicator.className = 'status disconnected';
+        appendMessage('system', 'Error: No authentication token found. Please scan the QR Code from VS Code.');
+        return;
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${protocol}//${window.location.host}`);
+    ws = new WebSocket(`${protocol}//${window.location.host}?token=${authToken}`);
 
     ws.onopen = () => {
         statusIndicator.textContent = 'Connected';
@@ -139,6 +175,17 @@ function updateModelList(models) {
     defaultOpt.value = '';
     defaultOpt.textContent = 'Default Model';
     modelSelect.appendChild(defaultOpt);
+
+    // Hardcode Copilot and Antigravity if available
+    const copilotOpt = document.createElement('option');
+    copilotOpt.value = 'copilot';
+    copilotOpt.textContent = 'GitHub Copilot';
+    modelSelect.appendChild(copilotOpt);
+
+    const antigravityOpt = document.createElement('option');
+    antigravityOpt.value = 'antigravity';
+    antigravityOpt.textContent = 'Antigravity (Gemini)';
+    modelSelect.appendChild(antigravityOpt);
     
     models.forEach(m => {
         const opt = document.createElement('option');
@@ -149,6 +196,8 @@ function updateModelList(models) {
     });
     
     if (foundOld) {
+        modelSelect.value = oldVal;
+    } else if (oldVal === 'copilot' || oldVal === 'antigravity') {
         modelSelect.value = oldVal;
     }
 }
@@ -251,5 +300,71 @@ btnDeny.addEventListener('click', () => {
     hideActionModal();
 });
 
+// Settings Logic
+btnSettings.addEventListener('click', () => {
+    const provider = localStorage.getItem('agentProvider') || 'openrouter';
+    providerSelect.value = provider;
+    apikeyInput.value = localStorage.getItem(`agentApiKey_${provider}`) || '';
+    settingsModal.style.display = 'flex';
+});
+
+providerSelect.addEventListener('change', () => {
+    const provider = providerSelect.value;
+    apikeyInput.value = localStorage.getItem(`agentApiKey_${provider}`) || '';
+});
+
+btnCancelSettings.addEventListener('click', () => {
+    settingsModal.style.display = 'none';
+});
+
+btnSaveSettings.addEventListener('click', () => {
+    const provider = providerSelect.value;
+    const apiKey = apikeyInput.value;
+    
+    localStorage.setItem('agentProvider', provider);
+    localStorage.setItem(`agentApiKey_${provider}`, apiKey);
+    
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'saveSettings', provider, apiKey }));
+        appendMessage('system', `Settings saved for provider: ${provider}`);
+    }
+    
+    settingsModal.style.display = 'none';
+});
+
 // Init
 connect();
+
+// PWA Installation Logic
+let deferredPrompt;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    btnInstall.style.display = 'flex';
+});
+
+btnInstall.addEventListener('click', async () => {
+    if (deferredPrompt) {
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        if (outcome === 'accepted') {
+            btnInstall.style.display = 'none';
+        }
+        deferredPrompt = null;
+    } else {
+        // Fallback for iOS
+        alert("To install this app on your iPhone: tap the 'Share' icon at the bottom of Safari, then select 'Add to Home Screen'.");
+    }
+});
+
+// Detect iOS and standalone mode
+const isIos = () => {
+  const userAgent = window.navigator.userAgent.toLowerCase();
+  return /iphone|ipad|ipod/.test(userAgent);
+}
+const isInStandaloneMode = () => ('standalone' in window.navigator) && window.navigator.standalone;
+
+if (isIos() && !isInStandaloneMode()) {
+    btnInstall.style.display = 'flex';
+}

@@ -4,7 +4,8 @@ import { WebSocket, WebSocketServer } from 'ws';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
-import { handleAgentMessage, getConversationHistory, handleActionResponse, initializeAgent, getCachedModels } from './agent';
+import { handleAgentMessage, getConversationHistory, handleActionResponse, initializeAgent, getCachedModels, handleSettings } from './agent';
+import { validateToken } from './auth';
 
 let isHub = false;
 let hubServer: http.Server | null = null;
@@ -28,6 +29,29 @@ export async function startServer(context: vscode.ExtensionContext) {
 
 function attemptBecomeHub(context: vscode.ExtensionContext) {
     const app = express();
+    
+    // Dynamically serve manifest to bake in the token for iOS PWA sandboxes
+    app.get('/manifest.json', (req, res) => {
+        const token = req.query.token || '';
+        res.json({
+          "name": "VS Code Mobile Agent",
+          "short_name": "Mobile Agent",
+          "description": "Control your VS Code workspace remotely with AI.",
+          "start_url": `/?token=${token}`,
+          "display": "standalone",
+          "background_color": "#09090b",
+          "theme_color": "#09090b",
+          "icons": [
+            {
+              "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='192' height='192' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 2a10 10 0 1 0 10 10H12V2z'/></svg>",
+              "sizes": "192x192",
+              "type": "image/svg+xml",
+              "purpose": "any maskable"
+            }
+          ]
+        });
+    });
+
     app.use(express.static(path.join(context.extensionPath, 'public')));
     app.use(express.json());
 
@@ -51,9 +75,16 @@ function attemptBecomeHub(context: vscode.ExtensionContext) {
         activeSessions.set(sessionId, { ws: 'local', name: getWorkspaceName() });
 
         wss.on('connection', (ws, req) => {
-            if (req.url === '/worker') {
+            const url = new URL(req.url || '', 'http://localhost');
+            if (url.pathname === '/worker') {
                 handleWorkerConnection(ws);
             } else {
+                const token = url.searchParams.get('token');
+                if (!token || !validateToken(token)) {
+                    ws.send(JSON.stringify({ type: 'error', text: 'Authentication failed. Please scan the QR code from VS Code.' }));
+                    ws.close(1008, 'Authentication Failed');
+                    return;
+                }
                 handlePhoneConnection(ws);
             }
         });
@@ -125,6 +156,8 @@ function handlePhoneConnection(ws: WebSocket) {
                     ws.send(JSON.stringify({ type: 'history', history: getConversationHistory() }));
                 } else if (msg.type === 'actionResponse') {
                     handleActionResponse(msg.actionId, msg.approved);
+                } else if (msg.type === 'saveSettings') {
+                    handleSettings(msg.provider, msg.apiKey);
                 }
             } else {
                 // Forward to the specific worker
@@ -159,6 +192,8 @@ function becomeWorker(context: vscode.ExtensionContext) {
                     workerWs!.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'history', history: getConversationHistory() } }));
                 } else if (payload.type === 'actionResponse') {
                     handleActionResponse(payload.actionId, payload.approved);
+                } else if (payload.type === 'saveSettings') {
+                    handleSettings(payload.provider, payload.apiKey);
                 }
             }
         } catch(e) {}

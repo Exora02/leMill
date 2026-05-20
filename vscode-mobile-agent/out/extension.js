@@ -37,12 +37,17 @@ exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const server_1 = require("./server");
-function activate(context) {
+const auth_1 = require("./auth");
+async function activate(context) {
     console.log('Mobile Agent Extension is now active!');
+    await (0, auth_1.initializeAuth)(context);
     let startCmd = vscode.commands.registerCommand('vscode-mobile-agent.startServer', () => {
         (0, server_1.startServer)(context).catch(console.error);
     });
-    context.subscriptions.push(startCmd);
+    let qrCmd = vscode.commands.registerCommand('vscode-mobile-agent.showQRCode', () => {
+        (0, auth_1.showQRCodeWebview)(context).catch(console.error);
+    });
+    context.subscriptions.push(startCmd, qrCmd);
     // Auto-start server for convenience
     (0, server_1.startServer)(context).catch(console.error);
 }
