@@ -4,6 +4,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import { handleAgentMessage, getConversationHistory, handleActionResponse, initializeAgent, getCachedModels, handleSettings } from './agent';
 import { validateToken } from './auth';
 
@@ -50,6 +51,20 @@ function attemptBecomeHub(context: vscode.ExtensionContext) {
             }
           ]
         });
+    });
+
+    // Dynamically serve index.html to inject the manifest token before browser parses it
+    app.get('/', (req, res) => {
+        try {
+            let html = fs.readFileSync(path.join(context.extensionPath, 'public', 'index.html'), 'utf-8');
+            const token = req.query.token || '';
+            if (token) {
+                html = html.replace('href="manifest.json"', `href="manifest.json?token=${token}"`);
+            }
+            res.send(html);
+        } catch (e) {
+            res.status(500).send('Error loading UI');
+        }
     });
 
     app.use(express.static(path.join(context.extensionPath, 'public')));

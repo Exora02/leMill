@@ -41,6 +41,7 @@ const ws_1 = require("ws");
 const path = __importStar(require("path"));
 const vscode = __importStar(require("vscode"));
 const crypto = __importStar(require("crypto"));
+const fs = __importStar(require("fs"));
 const agent_1 = require("./agent");
 const auth_1 = require("./auth");
 let isHub = false;
@@ -80,6 +81,20 @@ function attemptBecomeHub(context) {
                 }
             ]
         });
+    });
+    // Dynamically serve index.html to inject the manifest token before browser parses it
+    app.get('/', (req, res) => {
+        try {
+            let html = fs.readFileSync(path.join(context.extensionPath, 'public', 'index.html'), 'utf-8');
+            const token = req.query.token || '';
+            if (token) {
+                html = html.replace('href="manifest.json"', `href="manifest.json?token=${token}"`);
+            }
+            res.send(html);
+        }
+        catch (e) {
+            res.status(500).send('Error loading UI');
+        }
     });
     app.use(express.static(path.join(context.extensionPath, 'public')));
     app.use(express.json());

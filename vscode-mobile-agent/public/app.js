@@ -41,14 +41,6 @@ if (urlToken) {
     window.history.replaceState({}, document.title, window.location.pathname);
 }
 
-// Dynamically inject token into manifest URL so iOS PWA saves the token in start_url
-if (authToken) {
-    const manifestLink = document.getElementById('manifest-link');
-    if (manifestLink) {
-        manifestLink.setAttribute('href', `manifest.json?token=${authToken}`);
-    }
-}
-
 function escapeHtml(unsafe) {
     return unsafe
          .replace(/&/g, "&amp;")
@@ -338,10 +330,12 @@ connect();
 // PWA Installation Logic
 let deferredPrompt;
 
+// Unconditionally show the button
+btnInstall.style.display = 'flex';
+
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredPrompt = e;
-    btnInstall.style.display = 'flex';
 });
 
 btnInstall.addEventListener('click', async () => {
@@ -353,18 +347,7 @@ btnInstall.addEventListener('click', async () => {
         }
         deferredPrompt = null;
     } else {
-        // Fallback for iOS
-        alert("To install this app on your iPhone: tap the 'Share' icon at the bottom of Safari, then select 'Add to Home Screen'.");
+        // Fallback for when the automatic prompt isn't allowed (e.g. insecure origin or iOS)
+        alert("To install this app:\n\nAndroid/Chrome: Tap the 3-dot menu and select 'Add to Home screen'.\n\niOS/Safari: Tap the 'Share' icon at the bottom, then select 'Add to Home Screen'.");
     }
 });
-
-// Detect iOS and standalone mode
-const isIos = () => {
-  const userAgent = window.navigator.userAgent.toLowerCase();
-  return /iphone|ipad|ipod/.test(userAgent);
-}
-const isInStandaloneMode = () => ('standalone' in window.navigator) && window.navigator.standalone;
-
-if (isIos() && !isInStandaloneMode()) {
-    btnInstall.style.display = 'flex';
-}
