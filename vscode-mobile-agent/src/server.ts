@@ -4,7 +4,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
-import { handleAgentMessage, getConversationHistory } from './agent';
+import { handleAgentMessage, getConversationHistory, handleActionResponse } from './agent';
 
 let isHub = false;
 let hubServer: http.Server | null = null;
@@ -115,12 +115,14 @@ function handlePhoneConnection(ws: WebSocket) {
             if (session.ws === 'local') {
                 // Handle locally in this window (The Hub's own workspace)
                 if (msg.type === 'chat') {
-                    await handleAgentMessage(msg.text, (chunk: string) => {
-                        ws.send(JSON.stringify({ type: 'chunk', text: chunk }));
+                    await handleAgentMessage(msg.text, (evt: any) => {
+                        ws.send(JSON.stringify(evt));
                     });
                     ws.send(JSON.stringify({ type: 'done' }));
                 } else if (msg.type === 'getHistory') {
                     ws.send(JSON.stringify({ type: 'history', history: getConversationHistory() }));
+                } else if (msg.type === 'actionResponse') {
+                    handleActionResponse(msg.actionId, msg.approved);
                 }
             } else {
                 // Forward to the specific worker
@@ -147,12 +149,14 @@ function becomeWorker(context: vscode.ExtensionContext) {
             if (msg.type === 'forwardToWorker') {
                 const payload = msg.payload;
                 if (payload.type === 'chat') {
-                    await handleAgentMessage(payload.text, (chunk: string) => {
-                        workerWs!.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'chunk', text: chunk } }));
+                    await handleAgentMessage(payload.text, (evt: any) => {
+                        workerWs!.send(JSON.stringify({ type: 'forwardToPhone', payload: evt }));
                     });
                     workerWs!.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'done' } }));
                 } else if (payload.type === 'getHistory') {
                     workerWs!.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'history', history: getConversationHistory() } }));
+                } else if (payload.type === 'actionResponse') {
+                    handleActionResponse(payload.actionId, payload.approved);
                 }
             }
         } catch(e) {}

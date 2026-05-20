@@ -5,9 +5,16 @@ const statusIndicator = document.getElementById('status-indicator');
 const typingIndicator = document.getElementById('typing-indicator');
 const sessionSelect = document.getElementById('session-select');
 
+// Modal Elements
+const modal = document.getElementById('action-modal');
+const modalCmdText = document.getElementById('modal-command-text');
+const btnApprove = document.getElementById('btn-approve');
+const btnDeny = document.getElementById('btn-deny');
+
 let ws;
 let currentAgentMessageDiv = null;
 let currentSessionId = null;
+let pendingActionId = null;
 
 function connect() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -25,9 +32,7 @@ function connect() {
         setTimeout(connect, 3000);
     };
 
-    ws.onerror = () => {
-        ws.close();
-    };
+    ws.onerror = () => ws.close();
 
     ws.onmessage = (event) => {
         try {
@@ -44,6 +49,9 @@ function connect() {
                 }
                 currentAgentMessageDiv.textContent += data.text;
                 scrollToBottom();
+            } else if (data.type === 'promptAction') {
+                hideTyping();
+                showActionModal(data.actionId, data.command);
             } else if (data.type === 'done') {
                 currentAgentMessageDiv = null;
                 hideTyping();
@@ -97,7 +105,6 @@ function requestHistory() {
 }
 
 function renderHistory(historyArray) {
-    // Clear existing messages except the first system one and the typing indicator
     const sysMsg = chatContainer.querySelector('.message.system');
     chatContainer.innerHTML = '';
     if (sysMsg) chatContainer.appendChild(sysMsg);
@@ -145,6 +152,36 @@ function sendMessage() {
 sendBtn.addEventListener('click', sendMessage);
 msgInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMessage();
+});
+
+// Modal Logic
+function showActionModal(actionId, commandText) {
+    pendingActionId = actionId;
+    modalCmdText.textContent = commandText;
+    modal.classList.add('visible');
+}
+
+function hideActionModal() {
+    modal.classList.remove('visible');
+    pendingActionId = null;
+}
+
+btnApprove.addEventListener('click', () => {
+    if (pendingActionId && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'actionResponse', sessionId: currentSessionId, actionId: pendingActionId, approved: true }));
+        appendMessage('system', `Approved command: ${modalCmdText.textContent}`);
+        showTyping();
+    }
+    hideActionModal();
+});
+
+btnDeny.addEventListener('click', () => {
+    if (pendingActionId && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'actionResponse', sessionId: currentSessionId, actionId: pendingActionId, approved: false }));
+        appendMessage('system', `Denied command: ${modalCmdText.textContent}`);
+        showTyping();
+    }
+    hideActionModal();
 });
 
 // Init

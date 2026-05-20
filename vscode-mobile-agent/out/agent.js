@@ -34,10 +34,22 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.conversationHistory = void 0;
+exports.handleActionResponse = handleActionResponse;
 exports.getConversationHistory = getConversationHistory;
 exports.handleAgentMessage = handleAgentMessage;
 const vscode = __importStar(require("vscode"));
 const fs = __importStar(require("fs/promises"));
+const cp = __importStar(require("child_process"));
+const crypto = __importStar(require("crypto"));
+// Pending Actions Map
+const pendingActions = new Map();
+function handleActionResponse(actionId, approved) {
+    const resolver = pendingActions.get(actionId);
+    if (resolver) {
+        resolver(approved);
+        pendingActions.delete(actionId);
+    }
+}
 // System prompt instructing the model how to use tools
 function getSystemPrompt() {
     let workspaceInfo = "No workspace folders opened.";
@@ -54,12 +66,16 @@ You have access to the following tools:
 1. <call_tool name="readFile">absolute_path_here</call_tool> - Reads a file's content.
 2. <call_tool name="listDirectory">absolute_path_here</call_tool> - Lists contents of a directory.
 3. <call_tool name="findFiles">glob_pattern</call_tool> - Finds files in the workspace (e.g. **/*.ts, src/app.js).
+4. <call_tool name="editFile">absolute_path|exact_text_to_replace|new_text</call_tool> - Edits a file by replacing an exact string with a new string. Use the pipe symbol | as a separator.
+5. <call_tool name="runTerminalCommand">command_here</call_tool> - Runs a shell command. The user will be prompted to approve it on their phone.
+6. <call_tool name="getDiagnostics"></call_tool> - Gets all compiler/linting errors (red squiggly lines) currently in the workspace.
+7. <call_tool name="getCurrentSelection"></call_tool> - Gets the text currently highlighted by the user in their active editor.
 
 To call a tool, output exactly the XML tag above and NOTHING else. Wait for the tool result before continuing.
 Do not hallucinate paths like /workspace. ALWAYS use the absolute paths from the Available workspace folders listed above.
 If you have the answer, just respond normally.`;
 }
-async function executeTool(name, arg) {
+async function executeTool(name, arg, onEvent) {
     try {
         if (name === 'readFile') {
             const data = await fs.readFile(arg.trim(), 'utf-8');
@@ -75,6 +91,65 @@ async function executeTool(name, arg) {
                 return 'No files found matching that pattern.';
             return uris.map(u => u.fsPath).join('\n');
         }
+        else if (name === 'editFile') {
+            const parts = arg.split('|');
+            if (parts.length !== 3)
+                return 'Error: editFile requires exactly 3 parts separated by | (path|target|replacement)';
+            const [filePath, target, replacement] = parts;
+            const content = await fs.readFile(filePath.trim(), 'utf-8');
+            if (!content.includes(target))
+                return 'Error: Target string not found in file.';
+            const newContent = content.replace(target, replacement);
+            await fs.writeFile(filePath.trim(), newContent, 'utf-8');
+            return 'File edited successfully.';
+        }
+        else if (name === 'runTerminalCommand') {
+            const actionId = crypto.randomUUID();
+            // Ask for UI confirmation
+            onEvent({ type: 'promptAction', actionId, command: arg.trim() });
+            // Wait for user to tap Approve or Deny
+            const approved = await new Promise((resolve) => {
+                pendingActions.set(actionId, resolve);
+            });
+            if (!approved) {
+                return 'User DENIED the execution of this command.';
+            }
+            // Execute command
+            return await new Promise((resolve) => {
+                const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+                cp.exec(arg.trim(), { cwd }, (error, stdout, stderr) => {
+                    if (error) {
+                        resolve(`Command failed: ${error.message}\nStderr: ${stderr}\nStdout: ${stdout}`.slice(0, 5000));
+                    }
+                    else {
+                        resolve(`Command succeeded.\nStdout: ${stdout}`.slice(0, 5000));
+                    }
+                });
+            });
+        }
+        else if (name === 'getDiagnostics') {
+            const diags = vscode.languages.getDiagnostics();
+            let result = '';
+            for (const [uri, fileDiags] of diags) {
+                if (fileDiags.length > 0) {
+                    result += `File: ${uri.fsPath}\n`;
+                    for (const d of fileDiags) {
+                        result += `  - Line ${d.range.start.line + 1}: ${d.message}\n`;
+                    }
+                }
+            }
+            return result || 'No errors or warnings found in the workspace.';
+        }
+        else if (name === 'getCurrentSelection') {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor)
+                return 'No active text editor.';
+            const selection = editor.selection;
+            if (selection.isEmpty)
+                return 'No text is currently highlighted.';
+            const text = editor.document.getText(selection);
+            return `Highlighted text in ${editor.document.uri.fsPath}:\n${text}`;
+        }
     }
     catch (e) {
         return `Error executing ${name}: ${e.message}`;
@@ -85,7 +160,7 @@ exports.conversationHistory = [];
 function getConversationHistory() {
     return exports.conversationHistory;
 }
-async function handleAgentMessage(userText, onChunk) {
+async function handleAgentMessage(userText, onEvent) {
     try {
         const config = vscode.workspace.getConfiguration('vscode-mobile-agent');
         const apiKey = config.get('apiKey');
@@ -99,7 +174,7 @@ async function handleAgentMessage(userText, onChunk) {
         else {
             const allModels = await vscode.lm.selectChatModels({});
             if (allModels.length === 0) {
-                onChunk('No AI models found in your VS Code, and no API Key is configured.\n\nPlease open VS Code Settings, search for "Mobile Agent", and add an API Key (e.g., OpenRouter) to use Bring-Your-Own-Key (BYOK).');
+                onEvent({ type: 'chunk', text: 'No AI models found in your VS Code, and no API Key is configured.\n\nPlease open VS Code Settings, search for "Mobile Agent", and add an API Key (e.g., OpenRouter) to use Bring-Your-Own-Key (BYOK).' });
                 return;
             }
             chatModel = allModels.find(m => m.name.includes('gpt-4') || m.family.includes('gpt-4')) || allModels[0];
@@ -130,7 +205,7 @@ async function handleAgentMessage(userText, onChunk) {
                 messages.push(vscode.LanguageModelChatMessage.Assistant(msg.text));
             }
         }
-        let maxLoops = 5;
+        let maxLoops = 10; // Increased loop limit for complex tool chains
         let finalAssistantText = '';
         while (maxLoops > 0) {
             maxLoops--;
@@ -159,7 +234,7 @@ async function handleAgentMessage(userText, onChunk) {
                 });
                 if (!response.ok) {
                     const errText = await response.text();
-                    onChunk(`API Error: ${response.status} ${response.statusText}\nDetails: ${errText}`);
+                    onEvent({ type: 'chunk', text: `API Error: ${response.status} ${response.statusText}\nDetails: ${errText}` });
                     break;
                 }
                 const reader = response.body?.getReader();
@@ -179,7 +254,7 @@ async function handleAgentMessage(userText, onChunk) {
                                     if (content) {
                                         fullResponseText += content;
                                         if (!fullResponseText.includes('<call_tool')) {
-                                            onChunk(content);
+                                            onEvent({ type: 'chunk', text: content });
                                             finalAssistantText += content;
                                         }
                                     }
@@ -195,25 +270,25 @@ async function handleAgentMessage(userText, onChunk) {
                 for await (const chunk of response.text) {
                     fullResponseText += chunk;
                     if (!fullResponseText.includes('<call_tool')) {
-                        onChunk(chunk);
+                        onEvent({ type: 'chunk', text: chunk });
                         finalAssistantText += chunk;
                     }
                 }
             }
-            const toolMatch = fullResponseText.match(/<call_tool name="([^"]+)">([^<]+)<\/call_tool>/);
+            const toolMatch = fullResponseText.match(/<call_tool name="([^"]+)">([^<]*)<\/call_tool>/);
             if (toolMatch) {
                 const toolName = toolMatch[1];
                 const toolArg = toolMatch[2];
                 const toolLog = `\n[Agent is running tool: ${toolName}(${toolArg})]\n`;
-                onChunk(toolLog);
+                onEvent({ type: 'chunk', text: toolLog });
                 finalAssistantText += toolLog;
-                const toolResult = await executeTool(toolName, toolArg);
+                const toolResult = await executeTool(toolName, toolArg, onEvent);
                 messages.push(vscode.LanguageModelChatMessage.Assistant(fullResponseText));
                 messages.push(vscode.LanguageModelChatMessage.User(`Tool Result:\n${toolResult}\nContinue your response.`));
                 continue;
             }
             if (fullResponseText.includes('<call_tool')) {
-                onChunk(fullResponseText);
+                onEvent({ type: 'chunk', text: fullResponseText });
                 finalAssistantText += fullResponseText;
             }
             break;
@@ -222,7 +297,7 @@ async function handleAgentMessage(userText, onChunk) {
         exports.conversationHistory.push({ role: 'assistant', text: finalAssistantText });
     }
     catch (err) {
-        onChunk(`\nError communicating with LM API: ${err.message}`);
+        onEvent({ type: 'chunk', text: `\nError communicating with LM API: ${err.message}` });
     }
 }
 //# sourceMappingURL=agent.js.map

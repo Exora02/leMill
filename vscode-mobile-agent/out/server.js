@@ -137,13 +137,16 @@ function handlePhoneConnection(ws) {
             if (session.ws === 'local') {
                 // Handle locally in this window (The Hub's own workspace)
                 if (msg.type === 'chat') {
-                    await (0, agent_1.handleAgentMessage)(msg.text, (chunk) => {
-                        ws.send(JSON.stringify({ type: 'chunk', text: chunk }));
+                    await (0, agent_1.handleAgentMessage)(msg.text, (evt) => {
+                        ws.send(JSON.stringify(evt));
                     });
                     ws.send(JSON.stringify({ type: 'done' }));
                 }
                 else if (msg.type === 'getHistory') {
                     ws.send(JSON.stringify({ type: 'history', history: (0, agent_1.getConversationHistory)() }));
+                }
+                else if (msg.type === 'actionResponse') {
+                    (0, agent_1.handleActionResponse)(msg.actionId, msg.approved);
                 }
             }
             else {
@@ -168,13 +171,16 @@ function becomeWorker(context) {
             if (msg.type === 'forwardToWorker') {
                 const payload = msg.payload;
                 if (payload.type === 'chat') {
-                    await (0, agent_1.handleAgentMessage)(payload.text, (chunk) => {
-                        workerWs.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'chunk', text: chunk } }));
+                    await (0, agent_1.handleAgentMessage)(payload.text, (evt) => {
+                        workerWs.send(JSON.stringify({ type: 'forwardToPhone', payload: evt }));
                     });
                     workerWs.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'done' } }));
                 }
                 else if (payload.type === 'getHistory') {
                     workerWs.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'history', history: (0, agent_1.getConversationHistory)() } }));
+                }
+                else if (payload.type === 'actionResponse') {
+                    (0, agent_1.handleActionResponse)(payload.actionId, payload.approved);
                 }
             }
         }
