@@ -4,6 +4,7 @@ const sendBtn = document.getElementById('send-btn');
 const statusIndicator = document.getElementById('status-indicator');
 const typingIndicator = document.getElementById('typing-indicator');
 const sessionSelect = document.getElementById('session-select');
+const sessionWrapper = document.getElementById('session-wrapper');
 
 // Modal Elements
 const modal = document.getElementById('action-modal');
@@ -13,8 +14,24 @@ const btnDeny = document.getElementById('btn-deny');
 
 let ws;
 let currentAgentMessageDiv = null;
+let currentMessageRaw = '';
 let currentSessionId = null;
 let pendingActionId = null;
+
+function escapeHtml(unsafe) {
+    return unsafe
+         .replace(/&/g, "&amp;")
+         .replace(/</g, "&lt;")
+         .replace(/>/g, "&gt;")
+         .replace(/"/g, "&quot;")
+         .replace(/'/g, "&#039;");
+}
+
+function formatAgentMessage(rawText) {
+    return escapeHtml(rawText)
+        .replace(/&lt;think&gt;/g, '<details class="thought-process"><summary>Thought Process</summary><div class="content">')
+        .replace(/&lt;\/think&gt;/g, '</div></details>');
+}
 
 function connect() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -28,7 +45,7 @@ function connect() {
     ws.onclose = () => {
         statusIndicator.textContent = 'Disconnected. Retrying...';
         statusIndicator.className = 'status disconnected';
-        sessionSelect.style.display = 'none';
+        sessionWrapper.style.display = 'none';
         setTimeout(connect, 3000);
     };
 
@@ -45,9 +62,11 @@ function connect() {
             } else if (data.type === 'chunk') {
                 hideTyping();
                 if (!currentAgentMessageDiv) {
-                    currentAgentMessageDiv = appendMessage('agent', '');
+                    currentAgentMessageDiv = appendMessage('agent', '', true);
+                    currentMessageRaw = '';
                 }
-                currentAgentMessageDiv.textContent += data.text;
+                currentMessageRaw += data.text;
+                currentAgentMessageDiv.innerHTML = formatAgentMessage(currentMessageRaw);
                 scrollToBottom();
             } else if (data.type === 'promptAction') {
                 hideTyping();
@@ -68,11 +87,11 @@ function connect() {
 
 function updateSessionList(sessions) {
     if (sessions.length === 0) {
-        sessionSelect.style.display = 'none';
+        sessionWrapper.style.display = 'none';
         return;
     }
     
-    sessionSelect.style.display = 'inline-block';
+    sessionWrapper.style.display = 'inline-block';
     const oldVal = sessionSelect.value;
     sessionSelect.innerHTML = '';
     
@@ -111,15 +130,19 @@ function renderHistory(historyArray) {
     chatContainer.appendChild(typingIndicator);
     
     historyArray.forEach(msg => {
-        appendMessage(msg.role, msg.text);
+        appendMessage(msg.role, msg.text, msg.role === 'agent');
     });
     scrollToBottom();
 }
 
-function appendMessage(sender, text) {
+function appendMessage(sender, text, isHtml = false) {
     const div = document.createElement('div');
     div.className = `message ${sender}`;
-    div.textContent = text;
+    if (sender === 'agent' || isHtml) {
+        div.innerHTML = formatAgentMessage(text);
+    } else {
+        div.textContent = text;
+    }
     chatContainer.insertBefore(div, typingIndicator);
     scrollToBottom();
     return div;
