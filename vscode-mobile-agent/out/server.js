@@ -197,6 +197,9 @@ function handlePhoneConnection(ws) {
                 else if (msg.type === 'saveSettings') {
                     (0, agent_1.handleSettings)(msg.provider, msg.apiKey);
                 }
+                else if (msg.type === 'clear') {
+                    require('./agent').clearConversationHistory();
+                }
             }
             else {
                 // Forward to the specific worker
@@ -233,6 +236,9 @@ function becomeWorker(context) {
                 }
                 else if (payload.type === 'saveSettings') {
                     (0, agent_1.handleSettings)(payload.provider, payload.apiKey);
+                }
+                else if (payload.type === 'clear') {
+                    require('./agent').clearConversationHistory();
                 }
             }
         }

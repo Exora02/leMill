@@ -21,6 +21,7 @@ const btnSaveSettings = document.getElementById('btn-save-settings');
 const btnCancelSettings = document.getElementById('btn-cancel-settings');
 const providerSelect = document.getElementById('provider-select');
 const apikeyInput = document.getElementById('apikey-input');
+const btnClear = document.getElementById('btn-clear');
 
 // PWA Install
 const btnInstall = document.getElementById('btn-install');
@@ -326,6 +327,19 @@ btnSaveSettings.addEventListener('click', () => {
 
 // Init
 connect();
+
+// Clear Chat Logic
+if (btnClear) {
+    btnClear.addEventListener('click', () => {
+        if (confirm('Clear chat history?')) {
+            chatContainer.innerHTML = '<div class="message system">Chat cleared.</div>';
+            chatContainer.appendChild(typingIndicator);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'clear', sessionId: currentSessionId }));
+            }
+        }
+    });
+}
 
 // PWA Installation Logic
 let deferredPrompt;

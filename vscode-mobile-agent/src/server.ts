@@ -173,6 +173,8 @@ function handlePhoneConnection(ws: WebSocket) {
                     handleActionResponse(msg.actionId, msg.approved);
                 } else if (msg.type === 'saveSettings') {
                     handleSettings(msg.provider, msg.apiKey);
+                } else if (msg.type === 'clear') {
+                    require('./agent').clearConversationHistory();
                 }
             } else {
                 // Forward to the specific worker
@@ -209,6 +211,8 @@ function becomeWorker(context: vscode.ExtensionContext) {
                     handleActionResponse(payload.actionId, payload.approved);
                 } else if (payload.type === 'saveSettings') {
                     handleSettings(payload.provider, payload.apiKey);
+                } else if (payload.type === 'clear') {
+                    require('./agent').clearConversationHistory();
                 }
             }
         } catch(e) {}

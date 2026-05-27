@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as cp from 'child_process';
 import * as crypto from 'crypto';
+import * as os from 'os';
 
 let extensionContext: vscode.ExtensionContext | null = null;
 let cachedModels: any[] = [];
@@ -78,18 +79,33 @@ export async function initializeAgent(context: vscode.ExtensionContext) {
     }
     
     activeProvider = context.globalState.get<string>('agentProvider') || 'openrouter';
-    const apiKey = await context.secrets.get(`agentApiKey_${activeProvider}`) || '';
+    let apiKey = await context.secrets.get(`agentApiKey_${activeProvider}`);
+    
+    if (!apiKey) {
+        // Fallback to legacy VS Code settings
+        const config = vscode.workspace.getConfiguration('vscode-mobile-agent');
+        apiKey = config.get<string>('apiKey');
+        if (apiKey) {
+            // Migrate it securely to SecretStorage
+            await context.secrets.store(`agentApiKey_${activeProvider}`, apiKey);
+            await config.update('apiKey', undefined, true);
+        }
+    }
     
     if (activeProvider === 'openrouter' && apiKey) {
         fetchOpenRouterModels(apiKey);
     } else {
         // Just initialize fallback lists
-        handleSettings(activeProvider, '');
+        handleSettings(activeProvider, apiKey || '');
     }
 }
 
 export function getCachedModels() {
     return cachedModels;
+}
+
+export function clearConversationHistory() {
+    conversationHistory = [];
 }
 
 export function getConversationHistory() {
@@ -109,24 +125,46 @@ function getSystemPrompt(): string {
             vscode.workspace.workspaceFolders.map(f => `- ${f.uri.fsPath}`).join('\n');
     }
 
-    return `You are a powerful AI agent running inside the user's VS Code editor. 
-The user is talking to you from their phone.
+    return `You are a powerful AI assistant running inside the user's VS Code editor. 
+The user is commanding you from their phone.
 
 ${workspaceInfo}
 
-You have access to the following tools:
-1. <call_tool name="readFile">absolute_path_here</call_tool>
-2. <call_tool name="listDirectory">absolute_path_here</call_tool>
-3. <call_tool name="findFiles">glob_pattern</call_tool>
-4. <call_tool name="createFile">absolute_path|content</call_tool>
-5. <call_tool name="replaceLines">absolute_path|startLine|endLine|newContent</call_tool>
-6. <call_tool name="runTerminalCommand">command_here</call_tool>
-7. <call_tool name="getGitDiff"></call_tool>
-8. <call_tool name="getDiagnostics"></call_tool>
-9. <call_tool name="getCurrentSelection"></call_tool>
+You have the ability to interact with the workspace using the following tools:
+- readFile: arg is absolute_path_here
+- listDirectory: arg is absolute_path_here
+- findFiles: arg is glob_pattern
+- createFile: arg is absolute_path|content
+- replaceLines: arg is absolute_path|startLine|endLine|newContent
+- runTerminalCommand: arg is command_here
+- getGitDiff: arg is empty
+- getDiagnostics: arg is empty
+- getCurrentSelection: arg is empty
 
-To call a tool, output exactly the XML tag above and NOTHING else. Wait for the tool result before continuing.
-Do not hallucinate paths like /workspace. ALWAYS use the absolute paths from the Available workspace folders listed above.`;
+CRITICAL INSTRUCTIONS:
+- DO NOT attempt to use native API function calling.
+- To execute a tool, you MUST output a markdown JSON block exactly like this:
+\`\`\`tool_call
+{
+  "name": "readFile",
+  "arg": "absolute_path_here"
+}
+\`\`\`
+- If you need to perform an action, YOU MUST ACTUALLY CALL THE TOOL. Do not just say "I will read the file". You must immediately output the JSON block!
+- You can only call ONE tool at a time. After outputting the block, stop and wait for the tool result.
+- ALWAYS use the absolute paths from the Available workspace folders listed above. Do not hallucinate paths like /workspace.
+
+EXAMPLE INTERACTION:
+User: Can you read my main.py file?
+Assistant: I will read the file to understand its contents.
+\`\`\`tool_call
+{
+  "name": "readFile",
+  "arg": "c:\\\\Users\\\\antoi\\\\Desktop\\\\leMill\\\\main.py"
+}
+\`\`\`
+User: Tool Result: print("Hello World")
+Assistant: The file contains a simple print statement.`;
 }
 
 async function executeTool(name: string, arg: string, onEvent: (evt: any) => void): Promise<string> {
@@ -222,7 +260,14 @@ async function executeTool(name: string, arg: string, onEvent: (evt: any) => voi
 
 export async function handleAgentMessage(userText: string, requestedModel: string, onEvent: (evt: any) => void) {
     try {
-        const apiKey = await extensionContext?.secrets.get(`agentApiKey_${activeProvider}`) || '';
+        let apiKey = await extensionContext?.secrets.get(`agentApiKey_${activeProvider}`);
+        
+        if (!apiKey) {
+            // Fallback to legacy VS Code settings
+            const config = vscode.workspace.getConfiguration('vscode-mobile-agent');
+            apiKey = config.get<string>('apiKey');
+        }
+
         let chatModel: any = null;
 
         // Native VS Code models (Copilot & Antigravity)
@@ -274,13 +319,18 @@ export async function handleAgentMessage(userText: string, requestedModel: strin
             maxLoops--;
             let fullResponseText = '';
 
+            let isGeneratingTool = false;
+
             if (chatModel) {
                 const response = await chatModel.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
                 for await (const chunk of response.text) {
                     fullResponseText += chunk;
-                    if (!fullResponseText.includes('<call_tool')) {
+                    finalAssistantText += chunk;
+                    if (fullResponseText.includes('```tool_call')) {
+                        isGeneratingTool = true;
+                    }
+                    if (!isGeneratingTool) {
                         onEvent({ type: 'chunk', text: chunk });
-                        finalAssistantText += chunk;
                     }
                 }
             } else {
@@ -316,22 +366,36 @@ export async function handleAgentMessage(userText: string, requestedModel: strin
 
                 const reader = response.body?.getReader();
                 const decoder = new TextDecoder("utf-8");
+                let buffer = '';
                 if (reader) {
                     while (true) {
                         const { done, value } = await reader.read();
                         if (done) break;
-                        const chunkStr = decoder.decode(value);
-                        const lines = chunkStr.split('\n');
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
                         for (const line of lines) {
-                            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+                            const trimmedLine = line.trim();
+                            if (trimmedLine.startsWith('data: ') && trimmedLine !== 'data: [DONE]') {
                                 try {
-                                    const data = JSON.parse(line.slice(6));
-                                    const content = data.choices[0]?.delta?.content || '';
+                                    const data = JSON.parse(trimmedLine.slice(6));
+                                    
+                                    if (data.error) {
+                                        const errStr = `\n[Stream Error]: ${data.error.message}`;
+                                        fullResponseText += errStr;
+                                        onEvent({ type: 'chunk', text: errStr });
+                                        break;
+                                    }
+
+                                    const content = data.choices?.[0]?.delta?.content || '';
                                     if (content) {
                                         fullResponseText += content;
-                                        if (!fullResponseText.includes('<call_tool')) {
+                                        finalAssistantText += content;
+                                        if (fullResponseText.includes('```tool_call')) {
+                                            isGeneratingTool = true;
+                                        }
+                                        if (!isGeneratingTool) {
                                             onEvent({ type: 'chunk', text: content });
-                                            finalAssistantText += content;
                                         }
                                     }
                                 } catch(e){}
@@ -341,25 +405,28 @@ export async function handleAgentMessage(userText: string, requestedModel: strin
                 }
             }
             
-            const toolMatch = fullResponseText.match(/<call_tool name="([^"]+)">([^<]*)<\/call_tool>/);
+            const toolMatch = fullResponseText.match(/```tool_call\s*(\{[\s\S]*?\})\s*```/);
             if (toolMatch) {
-                const toolName = toolMatch[1];
-                const toolArg = toolMatch[2];
-                const toolLog = `\n[Agent is running tool: ${toolName}(${toolArg})]\n`;
-                onEvent({ type: 'chunk', text: toolLog });
-                finalAssistantText += toolLog;
-                
-                const toolResult = await executeTool(toolName, toolArg, onEvent);
-                
-                messages.push(vscode.LanguageModelChatMessage.Assistant(fullResponseText));
-                messages.push(vscode.LanguageModelChatMessage.User(`Tool Result:\n${toolResult}\nContinue your response.`));
-                continue; 
+                try {
+                    const toolCall = JSON.parse(toolMatch[1]);
+                    const toolName = toolCall.name;
+                    const toolArg = toolCall.arg;
+                    const toolLog = `\n[Agent is running tool: ${toolName}(${toolArg})]\n`;
+                    onEvent({ type: 'chunk', text: toolLog });
+                    finalAssistantText += toolLog;
+                    
+                    const toolResult = await executeTool(toolName, toolArg, onEvent);
+                    
+                    messages.push(vscode.LanguageModelChatMessage.Assistant(fullResponseText));
+                    messages.push(vscode.LanguageModelChatMessage.User(`Tool Result:\n${toolResult}\nContinue your response.`));
+                    continue; 
+                } catch(e) {
+                    const errLog = `\n[Agent Tool Error: Invalid JSON in tool call]\n`;
+                    onEvent({ type: 'chunk', text: errLog });
+                    finalAssistantText += errLog;
+                }
             }
             
-            if (fullResponseText.includes('<call_tool')) {
-                onEvent({ type: 'chunk', text: fullResponseText });
-                finalAssistantText += fullResponseText;
-            }
             break;
         }
 
