@@ -12,21 +12,52 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@catppuccin/highlightjs@0.1.4/css/catppuccin-mocha.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <style>
         :root {
-            --bg-color: #09090b; /* zinc-950 */
-            --bg-light: #18181b; /* zinc-900 */
-            --bg-hover: #27272a; /* zinc-800 */
-            --text-main: #f4f4f5; /* zinc-100 */
-            --text-muted: #a1a1aa; /* zinc-400 */
-            --accent: #3b82f6;
-            --accent-glow: rgba(59, 130, 246, 0.4);
+            /* Catppuccin Mocha Palette */
+            --ctp-rosewater: #f5e0dc;
+            --ctp-flamingo: #f2cdcd;
+            --ctp-pink: #f5c2e7;
+            --ctp-mauve: #cba6f7;
+            --ctp-red: #f38ba8;
+            --ctp-maroon: #eba0ac;
+            --ctp-peach: #fab387;
+            --ctp-yellow: #f9e2af;
+            --ctp-green: #a6e3a1;
+            --ctp-teal: #94e2d5;
+            --ctp-sky: #89dceb;
+            --ctp-sapphire: #74c7ec;
+            --ctp-blue: #89b4fa;
+            --ctp-lavender: #b4befe;
+            --ctp-text: #cdd6f4;
+            --ctp-subtext1: #bac2de;
+            --ctp-subtext0: #a6adc8;
+            --ctp-overlay2: #9399b2;
+            --ctp-overlay1: #7f849c;
+            --ctp-overlay0: #6c7086;
+            --ctp-surface2: #585b70;
+            --ctp-surface1: #45475a;
+            --ctp-surface0: #313244;
+            --ctp-base: #1e1e2e;
+            --ctp-mantle: #181825;
+            --ctp-crust: #11111b;
+
+            --bg-color: var(--ctp-base);
+            --bg-light: var(--ctp-surface0);
+            --bg-hover: var(--ctp-surface1);
+            --text-main: var(--ctp-text);
+            --text-muted: var(--ctp-subtext0);
+            --accent: var(--ctp-mauve);
+            --accent-glow: rgba(203, 166, 247, 0.4);
             
-            /* Subtler Neumorphic Shadows for Zinc-950 */
-            --shadow-outset: 3px 3px 8px #040405, -3px -3px 8px #0e0e11;
-            --shadow-inset: inset 2px 2px 5px #040405, inset -2px -2px 5px #0e0e11;
-            --shadow-button: 2px 2px 5px #040405, -2px -2px 5px #0e0e11;
-            --shadow-button-active: inset 2px 2px 5px #040405, inset -2px -2px 5px #0e0e11;
+            /* Neumorphic Shadows for Base (#1e1e2e) */
+            --shadow-outset: 4px 4px 10px #13131d, -4px -4px 10px #29293f;
+            --shadow-inset: inset 3px 3px 6px #13131d, inset -3px -3px 6px #29293f;
+            --shadow-button: 2px 2px 5px #13131d, -2px -2px 5px #29293f;
+            --shadow-button-active: inset 2px 2px 5px #13131d, inset -2px -2px 5px #29293f;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -41,13 +72,16 @@
             overflow: hidden;
         }
 
-        /* Header */
+        /* Header - Glassmorphic */
         header {
             padding: 16px 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            background: rgba(30, 30, 46, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            box-shadow: 0 4px 20px rgba(17, 17, 27, 0.4);
             z-index: 10;
         }
 
@@ -141,6 +175,7 @@
             color: var(--text-main);
             border-bottom-right-radius: 4px;
             box-shadow: var(--shadow-outset);
+            border: 1px solid var(--ctp-surface0);
         }
 
         .message.agent {
@@ -149,36 +184,160 @@
             color: var(--text-muted);
             border-bottom-left-radius: 4px;
             box-shadow: var(--shadow-inset);
-            white-space: pre-wrap;
+            border: 1px solid var(--ctp-crust);
+        }
+
+        /* Markdown Styles */
+        .message.agent p {
+            margin-bottom: 12px;
+        }
+        .message.agent p:last-child {
+            margin-bottom: 0;
+        }
+        .message.agent pre {
+            background-color: var(--bg-light);
+            padding: 12px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 12px 0;
+            border: 1px solid #27272a;
+        }
+        .message.agent code {
+            font-family: monospace;
+            background-color: var(--bg-light);
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-size: 0.85em;
+        }
+        .message.agent pre code {
+            background-color: transparent;
+            padding: 0;
+            font-size: 0.85rem;
+        }
+        .message.agent ul, .message.agent ol {
+            margin: 12px 0;
+            padding-left: 24px;
+        }
+        .message.agent li {
+            margin-bottom: 4px;
+        }
+        .message.agent strong {
+            color: var(--text-main);
+            font-weight: 600;
         }
 
         /* Train of Thought */
         .thought-process {
-            background-color: var(--bg-light);
-            border-left: 2px solid #52525b;
-            border-radius: 6px;
-            margin: 8px 0;
-            padding: 8px 12px;
+            background-color: var(--ctp-crust);
+            border: 1px solid var(--ctp-surface0);
+            border-radius: 8px;
+            margin: 12px 0;
+            padding: 10px 14px;
             font-size: 0.85rem;
-            color: var(--text-muted);
+            color: var(--ctp-overlay1);
+            transition: all 0.2s ease;
         }
 
         .thought-process summary {
             cursor: pointer;
             font-weight: 500;
             user-select: none;
-            color: #d4d4d8;
+            color: var(--ctp-subtext1);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .thought-process summary svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
         }
         
         .thought-process summary:hover {
-            color: var(--text-main);
+            color: var(--ctp-text);
         }
 
         .thought-process .content {
-            margin-top: 8px;
+            margin-top: 10px;
             white-space: pre-wrap;
-            font-family: monospace;
             opacity: 0.8;
+            border-top: 1px solid var(--ctp-surface0);
+            padding-top: 10px;
+            line-height: 1.6;
+        }
+
+        /* Tool Execution Pill */
+        .tool-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background-color: var(--ctp-surface0);
+            border: 1px solid var(--ctp-surface1);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            margin: 8px 0;
+            box-shadow: var(--shadow-outset);
+            color: var(--ctp-text);
+        }
+        
+        .tool-pill svg {
+            width: 14px;
+            height: 14px;
+            stroke: var(--ctp-green);
+        }
+        
+        .tool-pill .arg {
+            color: var(--ctp-subtext0);
+            max-width: 150px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Code Block Header */
+        .code-block {
+            margin: 12px 0;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid var(--ctp-surface0);
+            box-shadow: var(--shadow-outset);
+        }
+        
+        .code-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: var(--ctp-surface0);
+            padding: 6px 12px;
+            font-size: 0.75rem;
+            color: var(--ctp-subtext1);
+            font-family: monospace;
+        }
+        
+        .code-header button {
+            background: none;
+            border: none;
+            color: var(--ctp-text);
+            cursor: pointer;
+            font-size: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            transition: color 0.2s;
+        }
+        
+        .code-header button:hover {
+            color: var(--ctp-green);
+        }
+        
+        .message.agent .code-block pre {
+            margin: 0;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+            background-color: var(--ctp-crust);
         }
 
         .message.system {
@@ -189,14 +348,16 @@
             box-shadow: none;
         }
 
-        /* Input Area */
+        /* Input Area - Glassmorphic */
         .input-area {
-            padding: 20px;
+            padding: 16px 20px 24px 20px;
             display: flex;
             gap: 16px;
             align-items: center;
-            background-color: var(--bg-color);
-            box-shadow: 0 -4px 16px rgba(0,0,0,0.2);
+            background: rgba(30, 30, 46, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            box-shadow: 0 -4px 20px rgba(17, 17, 27, 0.4);
             z-index: 10;
         }
 

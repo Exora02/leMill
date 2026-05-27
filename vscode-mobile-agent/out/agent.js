@@ -430,12 +430,35 @@ async function handleAgentMessage(userText, requestedModel, onEvent) {
                     }
                 }
             }
-            const toolMatch = fullResponseText.match(/```tool_call\s*(\{[\s\S]*?\})\s*```/);
-            if (toolMatch) {
+            // DEBUG LOGGING
+            try {
+                const fs = require('fs').promises;
+                const path = require('path');
+                const os = require('os');
+                const debugPath = path.join(os.homedir(), 'Desktop', 'agent_debug.log');
+                const logData = `\n[REQUEST]\n${JSON.stringify(messages.map((m) => ({ role: m.role, content: m.content })), null, 2)}\n\n[RESPONSE]\n${fullResponseText}\n=================================\n`;
+                await fs.appendFile(debugPath, logData, 'utf-8');
+            }
+            catch (e) { }
+            let toolName = '';
+            let toolArg = '';
+            let validToolCall = false;
+            const blockMatch = fullResponseText.match(/```tool_call\s*([\s\S]*)/);
+            if (blockMatch) {
                 try {
-                    const toolCall = JSON.parse(toolMatch[1]);
-                    const toolName = toolCall.name;
-                    const toolArg = toolCall.arg;
+                    let jsonStr = blockMatch[1].replace(/```\s*$/, '').trim();
+                    const toolCall = JSON.parse(jsonStr);
+                    toolName = toolCall.name;
+                    toolArg = toolCall.arg;
+                    validToolCall = true;
+                }
+                catch (e) {
+                    messages.push(vscode.LanguageModelChatMessage.Assistant(fullResponseText));
+                    messages.push(vscode.LanguageModelChatMessage.User(`Failed to parse tool call JSON: ${e.message}. Make sure you output a single valid JSON object inside the tool_call block.`));
+                }
+            }
+            if (validToolCall) {
+                try {
                     const toolLog = `\n[Agent is running tool: ${toolName}(${toolArg})]\n`;
                     onEvent({ type: 'chunk', text: toolLog });
                     finalAssistantText += toolLog;

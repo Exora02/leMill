@@ -51,10 +51,85 @@ function escapeHtml(unsafe) {
          .replace(/'/g, "&#039;");
 }
 
+// Configure Marked.js
+if (typeof marked !== 'undefined') {
+    const renderer = new marked.Renderer();
+    
+    // Custom Code Block Renderer
+    renderer.code = function(code, language) {
+        if (typeof code === 'object') {
+            language = code.lang;
+            code = code.text;
+        }
+        
+        const lang = (language || 'text').toLowerCase();
+        let highlighted = code;
+        if (typeof hljs !== 'undefined') {
+            try {
+                highlighted = language ? hljs.highlight(code, { language }).value : hljs.highlightAuto(code).value;
+            } catch (e) {}
+        }
+        
+        // Use a safe ID for the copy button
+        const id = 'code-' + Math.random().toString(36).substr(2, 9);
+        const escapedCode = escapeHtml(code).replace(/'/g, "\\'").replace(/\n/g, "\\n");
+        
+        return `<div class="code-block">
+            <div class="code-header">
+                <span>${lang}</span>
+                <button onclick="navigator.clipboard.writeText('${escapedCode}')">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    Copy
+                </button>
+            </div>
+            <pre><code class="hljs language-${lang}">${highlighted}</code></pre>
+        </div>`;
+    };
+
+    marked.setOptions({ renderer });
+}
+
 function formatAgentMessage(rawText) {
-    return escapeHtml(rawText)
-        .replace(/&lt;think&gt;/g, '<details class="thought-process"><summary>Thought Process</summary><div class="content">')
-        .replace(/&lt;\/think&gt;/g, '</div></details>');
+    try {
+        // Strip the JSON tool calls even if they are unclosed
+        let cleanedText = rawText.replace(/```tool_call\s*([\s\S]*?)(?:```\s*|$)/g, '');
+        
+        // Strip any leaked incomplete tool blocks that are immediately followed by a tool pill
+        cleanedText = cleanedText.replace(/```[\w_]*\s*(?=\[Agent is running tool:)/g, '');
+        
+        // Convert Tool Logs into UI Pills
+        cleanedText = cleanedText.replace(/\[Agent is running tool: ([^(]+)\(([^)]*)\)\]/g, (match, name, arg) => {
+            return `<div class="tool-pill" title="${escapeHtml(arg)}">
+                <svg class="tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                </svg>
+                <strong>${escapeHtml(name)}</strong>
+                <span class="arg">${escapeHtml(arg)}</span>
+            </div>`;
+        });
+
+        // Replace the `<think>` block for DeepSeek with an elegant Details dropdown
+        cleanedText = cleanedText.replace(/<think>([\s\S]*?)(?:<\/think>|$)/g, (match, thoughtProcess) => {
+            return `<details class="thought-process">
+                <summary>
+                    <svg class="brain-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v.733m-5.736.668l.518.518m-4.39 5.736h.733m20.15 0h.733M3.824 15.244l.518-.518m16.834.668l-.518-.518M14.25 3.104v.733M18.896 4.505l-.518.518M9.75 20.896v-.733m4.5 0v.733M4.5 12c0 4.142 3.358 7.5 7.5 7.5s7.5-3.358 7.5-7.5-3.358-7.5-7.5-7.5-7.5 3.358-7.5 7.5z"></path>
+                    </svg>
+                    Thought Process
+                </summary>
+                <div class="content">${marked.parse(thoughtProcess)}</div>
+            </details>`;
+        });
+
+        if (typeof marked !== 'undefined') {
+            return marked.parse(cleanedText);
+        }
+        return escapeHtml(cleanedText);
+    } catch (e) {
+        console.error("Format error:", e);
+        return `<div style="color:var(--ctp-red); border:1px solid var(--ctp-red); padding:8px; border-radius:4px; margin-bottom:8px;">Render Error: ${escapeHtml(e.message)}</div><pre style="white-space:pre-wrap; font-size:0.8rem;">${escapeHtml(rawText)}</pre>`;
+    }
 }
 
 function connect() {
@@ -99,7 +174,11 @@ function connect() {
                     currentMessageRaw = '';
                 }
                 currentMessageRaw += data.text;
-                currentAgentMessageDiv.innerHTML = formatAgentMessage(currentMessageRaw);
+                try {
+                    currentAgentMessageDiv.innerHTML = formatAgentMessage(currentMessageRaw);
+                } catch (e) {
+                    console.error("DOM Error", e);
+                }
                 scrollToBottom();
             } else if (data.type === 'promptAction') {
                 hideTyping();
