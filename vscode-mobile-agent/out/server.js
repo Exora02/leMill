@@ -184,12 +184,19 @@ function handlePhoneConnection(ws) {
                 // Handle locally in this window (The Hub's own workspace)
                 if (msg.type === 'chat') {
                     await (0, agent_1.handleAgentMessage)(msg.text, msg.model, (evt) => {
-                        ws.send(JSON.stringify(evt));
+                        phoneClients.forEach(c => {
+                            if (c.readyState === ws_1.WebSocket.OPEN)
+                                c.send(JSON.stringify(evt));
+                        });
                     });
-                    ws.send(JSON.stringify({ type: 'done' }));
+                    phoneClients.forEach(c => {
+                        if (c.readyState === ws_1.WebSocket.OPEN)
+                            c.send(JSON.stringify({ type: 'done' }));
+                    });
                 }
                 else if (msg.type === 'getHistory') {
-                    ws.send(JSON.stringify({ type: 'history', history: (0, agent_1.getConversationHistory)() }));
+                    const agent = require('./agent');
+                    ws.send(JSON.stringify({ type: 'history', history: agent.getConversationHistory(), isGenerating: agent.isGenerating, ongoingText: agent.ongoingAssistantMessage }));
                 }
                 else if (msg.type === 'actionResponse') {
                     (0, agent_1.handleActionResponse)(msg.actionId, msg.approved);
@@ -229,7 +236,8 @@ function becomeWorker(context) {
                     workerWs.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'done' } }));
                 }
                 else if (payload.type === 'getHistory') {
-                    workerWs.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'history', history: (0, agent_1.getConversationHistory)() } }));
+                    const agent = require('./agent');
+                    workerWs.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'history', history: agent.getConversationHistory(), isGenerating: agent.isGenerating, ongoingText: agent.ongoingAssistantMessage } }));
                 }
                 else if (payload.type === 'actionResponse') {
                     (0, agent_1.handleActionResponse)(payload.actionId, payload.approved);

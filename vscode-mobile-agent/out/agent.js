@@ -33,13 +33,13 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.conversationHistory = void 0;
+exports.ongoingAssistantMessage = exports.isGenerating = exports.conversationHistory = void 0;
 exports.handleActionResponse = handleActionResponse;
 exports.handleSettings = handleSettings;
 exports.initializeAgent = initializeAgent;
 exports.getCachedModels = getCachedModels;
-exports.clearConversationHistory = clearConversationHistory;
 exports.getConversationHistory = getConversationHistory;
+exports.clearConversationHistory = clearConversationHistory;
 exports.handleAgentMessage = handleAgentMessage;
 const vscode = __importStar(require("vscode"));
 const fs = __importStar(require("fs/promises"));
@@ -80,6 +80,8 @@ async function handleSettings(provider, apiKey) {
     }
 }
 exports.conversationHistory = [];
+exports.isGenerating = false;
+exports.ongoingAssistantMessage = '';
 async function fetchOpenRouterModels(key) {
     try {
         const resp = await fetch('https://openrouter.ai/api/v1/models', {
@@ -131,11 +133,17 @@ async function initializeAgent(context) {
 function getCachedModels() {
     return cachedModels;
 }
+function getConversationHistory() {
+    if (exports.isGenerating && exports.ongoingAssistantMessage) {
+        return [...exports.conversationHistory, { role: 'assistant', text: exports.ongoingAssistantMessage }];
+    }
+    return exports.conversationHistory;
+}
 function clearConversationHistory() {
     exports.conversationHistory = [];
-}
-function getConversationHistory() {
-    return exports.conversationHistory;
+    if (extensionContext) {
+        extensionContext.workspaceState.update('agentConversationHistory', exports.conversationHistory);
+    }
 }
 function saveConversationHistory() {
     if (extensionContext) {
@@ -294,6 +302,12 @@ async function executeTool(name, arg, onEvent) {
     return `Unknown tool: ${name}`;
 }
 async function handleAgentMessage(userText, requestedModel, onEvent) {
+    if (exports.isGenerating) {
+        onEvent({ type: 'error', text: 'Agent is already generating a response.' });
+        return;
+    }
+    exports.isGenerating = true;
+    exports.ongoingAssistantMessage = '';
     try {
         let apiKey = await extensionContext?.secrets.get(`agentApiKey_${activeProvider}`);
         if (!apiKey) {
@@ -307,6 +321,7 @@ async function handleAgentMessage(userText, requestedModel, onEvent) {
             const allModels = await vscode.lm.selectChatModels({});
             if (allModels.length === 0) {
                 onEvent({ type: 'chunk', text: 'No AI models found in VS Code, and no API Key is configured in the mobile app settings.' });
+                exports.isGenerating = false;
                 return;
             }
             if (requestedModel === 'copilot') {
@@ -354,6 +369,7 @@ async function handleAgentMessage(userText, requestedModel, onEvent) {
                 for await (const chunk of response.text) {
                     fullResponseText += chunk;
                     finalAssistantText += chunk;
+                    exports.ongoingAssistantMessage = finalAssistantText;
                     if (fullResponseText.includes('```tool_call')) {
                         isGeneratingTool = true;
                     }
@@ -416,6 +432,7 @@ async function handleAgentMessage(userText, requestedModel, onEvent) {
                                     if (content) {
                                         fullResponseText += content;
                                         finalAssistantText += content;
+                                        exports.ongoingAssistantMessage = finalAssistantText;
                                         if (fullResponseText.includes('```tool_call')) {
                                             isGeneratingTool = true;
                                         }
@@ -462,6 +479,7 @@ async function handleAgentMessage(userText, requestedModel, onEvent) {
                     const toolLog = `\n[Agent is running tool: ${toolName}(${toolArg})]\n`;
                     onEvent({ type: 'chunk', text: toolLog });
                     finalAssistantText += toolLog;
+                    exports.ongoingAssistantMessage = finalAssistantText;
                     const toolResult = await executeTool(toolName, toolArg, onEvent);
                     messages.push(vscode.LanguageModelChatMessage.Assistant(fullResponseText));
                     messages.push(vscode.LanguageModelChatMessage.User(`Tool Result:\n${toolResult}\nContinue your response.`));
@@ -471,6 +489,7 @@ async function handleAgentMessage(userText, requestedModel, onEvent) {
                     const errLog = `\n[Agent Tool Error: Invalid JSON in tool call]\n`;
                     onEvent({ type: 'chunk', text: errLog });
                     finalAssistantText += errLog;
+                    exports.ongoingAssistantMessage = finalAssistantText;
                 }
             }
             break;
@@ -480,6 +499,10 @@ async function handleAgentMessage(userText, requestedModel, onEvent) {
     }
     catch (err) {
         onEvent({ type: 'chunk', text: `\nError communicating with API: ${err.message}` });
+    }
+    finally {
+        exports.isGenerating = false;
+        exports.ongoingAssistantMessage = '';
     }
 }
 //# sourceMappingURL=agent.js.map

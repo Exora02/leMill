@@ -46,6 +46,8 @@ export interface ChatHistoryItem {
 }
 
 export let conversationHistory: ChatHistoryItem[] = [];
+export let isGenerating = false;
+export let ongoingAssistantMessage = '';
 
 async function fetchOpenRouterModels(key: string) {
     try {
@@ -104,12 +106,18 @@ export function getCachedModels() {
     return cachedModels;
 }
 
-export function clearConversationHistory() {
-    conversationHistory = [];
+export function getConversationHistory() {
+    if (isGenerating && ongoingAssistantMessage) {
+        return [...conversationHistory, { role: 'assistant', text: ongoingAssistantMessage }];
+    }
+    return conversationHistory;
 }
 
-export function getConversationHistory() {
-    return conversationHistory;
+export function clearConversationHistory() {
+    conversationHistory = [];
+    if (extensionContext) {
+        extensionContext.workspaceState.update('agentConversationHistory', conversationHistory);
+    }
 }
 
 function saveConversationHistory() {
@@ -259,6 +267,14 @@ async function executeTool(name: string, arg: string, onEvent: (evt: any) => voi
 }
 
 export async function handleAgentMessage(userText: string, requestedModel: string, onEvent: (evt: any) => void) {
+    if (isGenerating) {
+        onEvent({ type: 'error', text: 'Agent is already generating a response.' });
+        return;
+    }
+
+    isGenerating = true;
+    ongoingAssistantMessage = '';
+    
     try {
         let apiKey = await extensionContext?.secrets.get(`agentApiKey_${activeProvider}`);
         
@@ -275,6 +291,7 @@ export async function handleAgentMessage(userText: string, requestedModel: strin
             const allModels = await vscode.lm.selectChatModels({});
             if (allModels.length === 0) {
                 onEvent({ type: 'chunk', text: 'No AI models found in VS Code, and no API Key is configured in the mobile app settings.' });
+                isGenerating = false;
                 return;
             }
             if (requestedModel === 'copilot') {
@@ -326,6 +343,7 @@ export async function handleAgentMessage(userText: string, requestedModel: strin
                 for await (const chunk of response.text) {
                     fullResponseText += chunk;
                     finalAssistantText += chunk;
+                    ongoingAssistantMessage = finalAssistantText;
                     if (fullResponseText.includes('```tool_call')) {
                         isGeneratingTool = true;
                     }
@@ -391,6 +409,7 @@ export async function handleAgentMessage(userText: string, requestedModel: strin
                                     if (content) {
                                         fullResponseText += content;
                                         finalAssistantText += content;
+                                        ongoingAssistantMessage = finalAssistantText;
                                         if (fullResponseText.includes('```tool_call')) {
                                             isGeneratingTool = true;
                                         }
@@ -438,6 +457,7 @@ export async function handleAgentMessage(userText: string, requestedModel: strin
                     const toolLog = `\n[Agent is running tool: ${toolName}(${toolArg})]\n`;
                     onEvent({ type: 'chunk', text: toolLog });
                     finalAssistantText += toolLog;
+                    ongoingAssistantMessage = finalAssistantText;
                     
                     const toolResult = await executeTool(toolName, toolArg, onEvent);
                     
@@ -448,6 +468,7 @@ export async function handleAgentMessage(userText: string, requestedModel: strin
                     const errLog = `\n[Agent Tool Error: Invalid JSON in tool call]\n`;
                     onEvent({ type: 'chunk', text: errLog });
                     finalAssistantText += errLog;
+                    ongoingAssistantMessage = finalAssistantText;
                 }
             }
             
@@ -459,5 +480,8 @@ export async function handleAgentMessage(userText: string, requestedModel: strin
 
     } catch (err: any) {
         onEvent({ type: 'chunk', text: `\nError communicating with API: ${err.message}` });
+    } finally {
+        isGenerating = false;
+        ongoingAssistantMessage = '';
     }
 }

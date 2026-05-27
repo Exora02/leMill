@@ -106,7 +106,7 @@ function formatAgentMessage(rawText) {
                 </svg>
                 <strong>${escapeHtml(name)}</strong>
                 <span class="arg">${escapeHtml(arg)}</span>
-            </div>`;
+            </div>\n\n`;
         });
 
         // Replace the `<think>` block for DeepSeek with an elegant Details dropdown
@@ -167,6 +167,16 @@ function connect() {
                 updateModelList(data.models);
             } else if (data.type === 'history') {
                 renderHistory(data.history);
+                if (data.isGenerating && data.ongoingText) {
+                    currentMessageRaw = data.ongoingText;
+                    currentAgentMessageDiv = chatContainer.lastElementChild;
+                    if (currentAgentMessageDiv && currentAgentMessageDiv.classList.contains('typing-indicator')) {
+                        currentAgentMessageDiv = currentAgentMessageDiv.previousElementSibling;
+                    }
+                } else {
+                    currentAgentMessageDiv = null;
+                    currentMessageRaw = '';
+                }
             } else if (data.type === 'chunk') {
                 hideTyping();
                 if (!currentAgentMessageDiv) {

@@ -164,11 +164,16 @@ function handlePhoneConnection(ws: WebSocket) {
                 // Handle locally in this window (The Hub's own workspace)
                 if (msg.type === 'chat') {
                     await handleAgentMessage(msg.text, msg.model, (evt: any) => {
-                        ws.send(JSON.stringify(evt));
+                        phoneClients.forEach(c => {
+                            if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify(evt));
+                        });
                     });
-                    ws.send(JSON.stringify({ type: 'done' }));
+                    phoneClients.forEach(c => {
+                        if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify({ type: 'done' }));
+                    });
                 } else if (msg.type === 'getHistory') {
-                    ws.send(JSON.stringify({ type: 'history', history: getConversationHistory() }));
+                    const agent = require('./agent');
+                    ws.send(JSON.stringify({ type: 'history', history: agent.getConversationHistory(), isGenerating: agent.isGenerating, ongoingText: agent.ongoingAssistantMessage }));
                 } else if (msg.type === 'actionResponse') {
                     handleActionResponse(msg.actionId, msg.approved);
                 } else if (msg.type === 'saveSettings') {
@@ -206,7 +211,8 @@ function becomeWorker(context: vscode.ExtensionContext) {
                     });
                     workerWs!.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'done' } }));
                 } else if (payload.type === 'getHistory') {
-                    workerWs!.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'history', history: getConversationHistory() } }));
+                    const agent = require('./agent');
+                    workerWs!.send(JSON.stringify({ type: 'forwardToPhone', payload: { type: 'history', history: agent.getConversationHistory(), isGenerating: agent.isGenerating, ongoingText: agent.ongoingAssistantMessage } }));
                 } else if (payload.type === 'actionResponse') {
                     handleActionResponse(payload.actionId, payload.approved);
                 } else if (payload.type === 'saveSettings') {
