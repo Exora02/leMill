@@ -41,6 +41,7 @@ const vscode = __importStar(require("vscode"));
 const crypto = __importStar(require("crypto"));
 const QRCode = __importStar(require("qrcode"));
 const os = __importStar(require("os"));
+const server_1 = require("./server");
 exports.authToken = '';
 async function initializeAuth(context) {
     let savedToken = context.globalState.get('mobileAgentAuthToken');
@@ -73,7 +74,9 @@ async function showQRCodeWebview(context) {
     const ips = getLocalIPAddresses();
     // Prioritize standard local networks over VPNs like Tailscale
     const primaryIp = ips.find(ip => ip.startsWith('192.168.') || ip.startsWith('10.')) || ips[0];
-    const url = `http://${primaryIp}:8333?token=${exports.authToken}`;
+    // Prioritize HTTPS tunnel for Web Speech API
+    const baseUrl = server_1.activeTunnelUrl ? server_1.activeTunnelUrl : `http://${primaryIp}:8333`;
+    const url = `${baseUrl}?token=${exports.authToken}`;
     const panel = vscode.window.createWebviewPanel('mobileAgentQR', 'Mobile Agent Pairing', vscode.ViewColumn.One, { enableScripts: true });
     try {
         const qrDataUrl = await QRCode.toDataURL(url, { width: 400, margin: 2, color: { dark: '#09090b', light: '#f4f4f5' } });
@@ -114,6 +117,7 @@ async function showQRCodeWebview(context) {
                 </div>
                 <div style="font-size: 0.9em; text-align: center;">
                     <p style="margin-bottom: 8px;">Or visit manually:</p>
+                    ${server_1.activeTunnelUrl ? `<a href="${url}" style="color: var(--vscode-textLink-foreground); display: block; margin-bottom: 4px; word-break: break-all;">${url}</a>` : ''}
                     ${ips.map(ip => `<a href="http://${ip}:8333?token=${exports.authToken}" style="color: var(--vscode-textLink-foreground); display: block; margin-bottom: 4px; word-break: break-all;">http://${ip}:8333?token=${exports.authToken}</a>`).join('')}
                 </div>
             </body>

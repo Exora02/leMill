@@ -7,11 +7,14 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { handleAgentMessage, getConversationHistory, handleActionResponse, initializeAgent, getCachedModels, handleSettings } from './agent';
 import { validateToken } from './auth';
+import localtunnel from 'localtunnel';
 
 let isHub = false;
 let hubServer: http.Server | null = null;
 let wss: WebSocketServer | null = null;
 let workerWs: WebSocket | null = null;
+export let activeTunnelUrl: string | null = null;
+let tunnel: localtunnel.Tunnel | null = null;
 
 // Unique ID for this specific VS Code window session
 const sessionId = crypto.randomUUID();
@@ -80,7 +83,7 @@ function attemptBecomeHub(context: vscode.ExtensionContext) {
         }
     });
 
-    server.listen(port, '0.0.0.0', () => {
+    server.listen(port, '0.0.0.0', async () => {
         console.log(`Became Hub on port ${port}.`);
         isHub = true;
         hubServer = server;
@@ -104,7 +107,14 @@ function attemptBecomeHub(context: vscode.ExtensionContext) {
             }
         });
         
-        vscode.window.showInformationMessage(`Mobile Agent Hub started on port ${port}.`);
+        try {
+            tunnel = await localtunnel({ port });
+            activeTunnelUrl = tunnel.url;
+            vscode.window.showInformationMessage(`Mobile Agent Hub started. Tunnel active: ${tunnel.url}`);
+        } catch (err: any) {
+            console.error('Tunnel failed', err);
+            vscode.window.showWarningMessage('Failed to establish HTTPS tunnel. Microphone STT features may be blocked on mobile.');
+        }
     });
 }
 
@@ -239,6 +249,10 @@ function becomeWorker(context: vscode.ExtensionContext) {
 }
 
 export function stopServer() {
+    if (tunnel) {
+        tunnel.close();
+        tunnel = null;
+    }
     if (workerWs) {
         workerWs.close();
         workerWs = null;

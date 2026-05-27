@@ -22,6 +22,8 @@ const btnCancelSettings = document.getElementById('btn-cancel-settings');
 const providerSelect = document.getElementById('provider-select');
 const apikeyInput = document.getElementById('apikey-input');
 const btnClear = document.getElementById('btn-clear');
+const micBtn = document.getElementById('mic-btn');
+const ttsBtn = document.getElementById('tts-btn');
 
 // PWA Install
 const btnInstall = document.getElementById('btn-install');
@@ -40,6 +42,120 @@ if (urlToken) {
     authToken = urlToken;
     localStorage.setItem('agentAuthToken', authToken);
     window.history.replaceState({}, document.title, window.location.pathname);
+}
+
+// Text-to-Speech (TTS) State
+let isTTSActive = localStorage.getItem('agentTTS') === 'true';
+if (isTTSActive && ttsBtn) ttsBtn.classList.add('active');
+
+if (ttsBtn) {
+    ttsBtn.addEventListener('click', () => {
+        isTTSActive = !isTTSActive;
+        localStorage.setItem('agentTTS', isTTSActive);
+        ttsBtn.classList.toggle('active', isTTSActive);
+        if (!isTTSActive && window.speechSynthesis) {
+            window.speechSynthesis.cancel();
+        }
+    });
+}
+
+function speakText(text) {
+    if (!isTTSActive || !window.speechSynthesis) return;
+    
+    // Strip markdown formatting, tool calls, thinking blocks
+    let cleanText = text.replace(/```tool_call\s*([\s\S]*?)(?:```\s*|$)/g, '');
+    cleanText = cleanText.replace(/<think>([\s\S]*?)(?:<\/think>|$)/g, '');
+    cleanText = cleanText.replace(/```[\w_]*\s*(?=\[Agent is running tool:)/g, '');
+    cleanText = cleanText.replace(/\[Agent is running tool: [^\]]+\]/g, ' Running tool. ');
+    cleanText = cleanText.replace(/```[\s\S]*?```/g, ' Code snippet. ');
+    cleanText = cleanText.replace(/[#*_~`>]/g, '');
+    
+    cleanText = cleanText.trim();
+    if (!cleanText) return;
+    
+    // Cancel any ongoing speech
+    window.speechSynthesis.cancel();
+    
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.rate = 1.05;
+    window.speechSynthesis.speak(utterance);
+}
+
+// Speech-to-Text (STT) Setup
+let recognition = null;
+let isIntentionallyRecording = false;
+let baseText = '';
+
+if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new SpeechRecognition();
+    recognition.continuous = false; // MUST be false to avoid Android Chrome duplication bug
+    recognition.interimResults = true;
+    
+    recognition.onstart = function() {
+        if (micBtn) micBtn.classList.add('recording');
+        if (window.speechSynthesis) window.speechSynthesis.cancel();
+        
+        baseText = msgInput ? msgInput.value : '';
+        if (baseText.length > 0 && !baseText.endsWith(' ')) {
+            baseText += ' ';
+        }
+    };
+    
+    recognition.onresult = function(event) {
+        let segmentFinal = '';
+        let segmentInterim = '';
+        
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+                segmentFinal += event.results[i][0].transcript;
+            } else {
+                segmentInterim += event.results[i][0].transcript;
+            }
+        }
+        
+        if (msgInput) {
+            msgInput.value = baseText + segmentFinal + segmentInterim;
+        }
+    };
+    
+    recognition.onerror = function(event) {
+        console.error("Speech recognition error", event.error);
+        if (event.error === 'not-allowed') {
+            alert('Microphone access denied.\n\nNote: The Web Speech API requires a secure HTTPS connection or localhost. If you are accessing this via a local IP on your phone, the browser will block the microphone.');
+            isIntentionallyRecording = false;
+        }
+        // For other errors (like 'no-speech'), we just let onend handle it
+    };
+    
+    recognition.onend = function() {
+        if (isIntentionallyRecording) {
+            try {
+                recognition.start();
+            } catch(e) {
+                isIntentionallyRecording = false;
+                if (micBtn) micBtn.classList.remove('recording');
+            }
+        } else {
+            if (micBtn) micBtn.classList.remove('recording');
+        }
+    };
+    
+    if (micBtn) {
+        micBtn.addEventListener('click', () => {
+            if (isIntentionallyRecording) {
+                isIntentionallyRecording = false;
+                recognition.stop();
+            } else {
+                isIntentionallyRecording = true;
+                try {
+                    recognition.start();
+                } catch(e) {}
+            }
+        });
+    }
+} else {
+    if (micBtn) micBtn.style.display = 'none';
 }
 
 function escapeHtml(unsafe) {
@@ -194,6 +310,7 @@ function connect() {
                 hideTyping();
                 showActionModal(data.actionId, data.command);
             } else if (data.type === 'done') {
+                if (currentMessageRaw) speakText(currentMessageRaw);
                 currentAgentMessageDiv = null;
                 hideTyping();
             } else if (data.type === 'error') {

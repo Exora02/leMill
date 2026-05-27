@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import * as QRCode from 'qrcode';
 import * as os from 'os';
+import { activeTunnelUrl } from './server';
 
 export let authToken: string = '';
 
@@ -38,7 +39,10 @@ export async function showQRCodeWebview(context: vscode.ExtensionContext) {
     const ips = getLocalIPAddresses();
     // Prioritize standard local networks over VPNs like Tailscale
     const primaryIp = ips.find(ip => ip.startsWith('192.168.') || ip.startsWith('10.')) || ips[0];
-    const url = `http://${primaryIp}:8333?token=${authToken}`;
+    
+    // Prioritize HTTPS tunnel for Web Speech API
+    const baseUrl = activeTunnelUrl ? activeTunnelUrl : `http://${primaryIp}:8333`;
+    const url = `${baseUrl}?token=${authToken}`;
 
     const panel = vscode.window.createWebviewPanel(
         'mobileAgentQR',
@@ -87,6 +91,7 @@ export async function showQRCodeWebview(context: vscode.ExtensionContext) {
                 </div>
                 <div style="font-size: 0.9em; text-align: center;">
                     <p style="margin-bottom: 8px;">Or visit manually:</p>
+                    ${activeTunnelUrl ? `<a href="${url}" style="color: var(--vscode-textLink-foreground); display: block; margin-bottom: 4px; word-break: break-all;">${url}</a>` : ''}
                     ${ips.map(ip => `<a href="http://${ip}:8333?token=${authToken}" style="color: var(--vscode-textLink-foreground); display: block; margin-bottom: 4px; word-break: break-all;">http://${ip}:8333?token=${authToken}</a>`).join('')}
                 </div>
             </body>

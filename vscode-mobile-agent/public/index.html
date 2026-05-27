@@ -505,6 +505,20 @@
         .modal-btn.approve { color: #10b981; }
         .modal-btn.deny { color: #ef4444; }
 
+        /* Voice Input Animations */
+        @keyframes pulse-record {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); color: var(--text-muted); }
+            50% { transform: scale(1.1); box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); color: #ef4444; }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); color: var(--text-muted); }
+        }
+        #mic-btn.recording {
+            animation: pulse-record 1.5s infinite;
+            color: #ef4444;
+        }
+        #tts-btn.active {
+            color: #10b981; /* Green when TTS is enabled */
+        }
+
         /* Settings Form */
         .settings-group {
             text-align: left;
@@ -546,6 +560,7 @@
             align-items: center;
             justify-content: center;
             transition: color 0.2s, background 0.2s;
+            flex-shrink: 0;
         }
         
         .icon-btn:hover {
@@ -563,6 +578,9 @@
                 <button class="icon-btn" id="btn-install" aria-label="Install App" style="display: none;">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                 </button>
+                <button class="icon-btn" id="tts-btn" aria-label="Toggle Read Aloud">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path></svg>
+                </button>
                 <button class="icon-btn" id="btn-clear" aria-label="Clear Chat">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                 </button>
@@ -571,13 +589,12 @@
                 </button>
             </div>
             <div class="status" id="status-indicator">Connecting...</div>
-        </div>
-        <div class="header-right" style="display: flex; gap: 8px;">
-            <div class="select-wrapper" id="model-wrapper" style="display: none;">
-                <select id="model-select"></select>
+        <div class="header-right" style="display: flex; gap: 4px; min-width: 0;">
+            <div class="select-wrapper" id="model-wrapper" style="display: none; min-width: 0;">
+                <select id="model-select" style="max-width: 100px;"></select>
             </div>
-            <div class="select-wrapper" id="session-wrapper" style="display: none;">
-                <select id="session-select"></select>
+            <div class="select-wrapper" id="session-wrapper" style="display: none; min-width: 0;">
+                <select id="session-select" style="max-width: 90px;"></select>
             </div>
         </div>
     </header>
@@ -590,6 +607,9 @@
     </div>
 
     <div class="input-area">
+        <button id="mic-btn" class="icon-btn" aria-label="Voice Input">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+        </button>
         <input type="text" id="msg-input" placeholder="Message agent..." autocomplete="off">
         <button id="send-btn" aria-label="Send">
             <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path></svg>

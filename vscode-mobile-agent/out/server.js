@@ -32,7 +32,11 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.activeTunnelUrl = void 0;
 exports.startServer = startServer;
 exports.stopServer = stopServer;
 const express = require("express");
@@ -44,10 +48,13 @@ const crypto = __importStar(require("crypto"));
 const fs = __importStar(require("fs"));
 const agent_1 = require("./agent");
 const auth_1 = require("./auth");
+const localtunnel_1 = __importDefault(require("localtunnel"));
 let isHub = false;
 let hubServer = null;
 let wss = null;
 let workerWs = null;
+exports.activeTunnelUrl = null;
+let tunnel = null;
 // Unique ID for this specific VS Code window session
 const sessionId = crypto.randomUUID();
 function getWorkspaceName() {
@@ -106,7 +113,7 @@ function attemptBecomeHub(context) {
             becomeWorker(context);
         }
     });
-    server.listen(port, '0.0.0.0', () => {
+    server.listen(port, '0.0.0.0', async () => {
         console.log(`Became Hub on port ${port}.`);
         isHub = true;
         hubServer = server;
@@ -128,7 +135,15 @@ function attemptBecomeHub(context) {
                 handlePhoneConnection(ws);
             }
         });
-        vscode.window.showInformationMessage(`Mobile Agent Hub started on port ${port}.`);
+        try {
+            tunnel = await (0, localtunnel_1.default)({ port });
+            exports.activeTunnelUrl = tunnel.url;
+            vscode.window.showInformationMessage(`Mobile Agent Hub started. Tunnel active: ${tunnel.url}`);
+        }
+        catch (err) {
+            console.error('Tunnel failed', err);
+            vscode.window.showWarningMessage('Failed to establish HTTPS tunnel. Microphone STT features may be blocked on mobile.');
+        }
     });
 }
 function broadcastSessionList() {
@@ -265,6 +280,10 @@ function becomeWorker(context) {
     });
 }
 function stopServer() {
+    if (tunnel) {
+        tunnel.close();
+        tunnel = null;
+    }
     if (workerWs) {
         workerWs.close();
         workerWs = null;
