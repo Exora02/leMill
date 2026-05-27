@@ -290,7 +290,8 @@ function renderHistory(historyArray) {
     chatContainer.appendChild(typingIndicator);
     
     historyArray.forEach(msg => {
-        appendMessage(msg.role, msg.text, msg.role === 'agent');
+        const displayRole = msg.role === 'assistant' ? 'agent' : msg.role;
+        appendMessage(displayRole, msg.text, displayRole === 'agent');
     });
     scrollToBottom();
 }
